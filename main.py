@@ -1,167 +1,138 @@
 from fastapi import FastAPI, UploadFile, File, Form
+from fastapi.middleware.cors import CORSMiddleware
 import pandas as pd
 import io
 
 app = FastAPI()
 
-# In-memory storage
+# Allow frontend access
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# In-memory storage (for now)
 storage = {}
 
 # -----------------------------
-# Load CSV safely
+# Utility: Flexible CSV parser
 # -----------------------------
 def load_csv(file: UploadFile):
     content = file.file.read()
     df = pd.read_csv(io.BytesIO(content))
 
     # Normalize column names
-    df.columns = df.columns.str.strip().str.lower()
+    df.columns = [c.strip().lower() for c in df.columns]
 
-    # Print for debugging
-    print("Detected columns:", df.columns.tolist())
-
-    # Smart mapping
-    item_candidates = ["item", "category", "description", "account", "name"]
-    amount_candidates = ["amount", "value", "total", "balance", "net"]
-
-    item_col = None
-    amount_col = None
+    # Try to map columns automatically
+    col_map = {}
 
     for col in df.columns:
-        if col in item_candidates:
-            item_col = col
-        if col in amount_candidates:
-            amount_col = col
+        if "item" in col or "name" in col or "category" in col:
+            col_map["item"] = col
+        if "amount" in col or "value" in col or "total" in col:
+            col_map["amount"] = col
 
-    # Fallback: assume first column = item, second = amount
-    if not item_col and len(df.columns) >= 1:
-        item_col = df.columns[0]
+    if "item" not in col_map or "amount" not in col_map:
+        raise ValueError("CSV must contain identifiable item and amount columns")
 
-    if not amount_col and len(df.columns) >= 2:
-        amount_col = df.columns[1]
-
-    # Rename to standard
     df = df.rename(columns={
-        item_col: "item",
-        amount_col: "amount"
+        col_map["item"]: "item",
+        col_map["amount"]: "amount"
     })
+
+    df["amount"] = pd.to_numeric(df["amount"], errors="coerce").fillna(0)
 
     return df
 
-
 # -----------------------------
-# INCOME STATEMENT ENGINE
-# -----------------------------
-def process_income_statement(df):
-
-    if "amount" not in df.columns or "item" not in df.columns:
-        return {"error": "CSV must contain 'Item' and 'Amount'"}
-
-    df["amount"] = pd.to_numeric(df["amount"], errors="coerce").fillna(0)
-    df["item"] = df["item"].astype(str)
-
-    revenue = df[df["amount"] > 0]["amount"].sum()
-    expenses = abs(df[df["amount"] < 0]["amount"].sum())
-
-    # Detect COGS safely
-    cogs_keywords = ["cogs", "cost of goods", "food", "beverage"]
-    cogs = df[
-        df["item"].str.lower().str.contains("|".join(cogs_keywords), na=False)
-    ]["amount"].abs().sum()
-
-    operating_expenses = expenses - cogs
-
-    gross_profit = revenue - cogs
-    net_profit = revenue - expenses
-
-    gross_margin = gross_profit / revenue if revenue > 0 else 0
-
-    return {
-        "revenue": round(revenue, 2),
-        "cogs": round(cogs, 2),
-        "operating_expenses": round(operating_expenses, 2),
-        "gross_profit": round(gross_profit, 2),
-        "net_profit": round(net_profit, 2),
-        "gross_margin": round(gross_margin, 2),
-        "category_breakdown": df.groupby("item")["amount"].sum().to_dict()
-    }
-
-
-# -----------------------------
-# CASHFLOW ENGINE (UPGRADED)
-# -----------------------------
-def process_cashflow(df):
-
-    inflow_cols = ["inflow", "cash in", "credit"]
-    outflow_cols = ["outflow", "cash out", "debit"]
-
-    inflow_col = next((c for c in inflow_cols if c in df.columns), None)
-    outflow_col = next((c for c in outflow_cols if c in df.columns), None)
-
-    if inflow_col and outflow_col:
-        inflow = pd.to_numeric(df[inflow_col], errors="coerce").fillna(0).sum()
-        outflow = pd.to_numeric(df[outflow_col], errors="coerce").fillna(0).sum()
-        net_cashflow = inflow - outflow
-
-    elif "amount" in df.columns:
-        net_cashflow = pd.to_numeric(df["amount"], errors="coerce").fillna(0).sum()
-
-    else:
-        return {"error": "Cashflow file must contain Inflow/Outflow or Amount column"}
-
-    return {
-        "net_cashflow": round(net_cashflow, 2)
-    }
-
-
-# -----------------------------
-# UPLOAD API
+# Upload API
 # -----------------------------
 @app.post("/api/upload")
-async def upload_file(file: UploadFile = File(...), doc_type: str = Form(...)):
-
-    df = load_csv(file)
-
-    if doc_type not in ["income_statement", "expenses", "cashflow"]:
-        return {"error": "Invalid doc_type"}
-
-    storage[doc_type] = df
-
-    return {"message": f"{doc_type} uploaded successfully"}
-
-
-# -----------------------------
-# DASHBOARD API
-# -----------------------------
-@app.get("/api/dashboard")
-def dashboard():
-
+async def upload_file(
+    file: UploadFile = File(...),
+    doc_type: str = Form(...)
+):
     try:
-        if "income_statement" not in storage:
-            return {"error": "Upload income_statement first"}
+        df = load_csv(file)
 
-        income_data = process_income_statement(storage["income_statement"])
+        valid_types = [
+            "income_statement",
+            "expenses",
+            "cashflow",
+            "balance_sheet",
+            "general_ledger"
+        ]
 
-        # If processing failed
-        if "error" in income_data:
-            return income_data
+        if doc_type not in valid_types:
+            return {"error": "Invalid doc_type"}
 
-        result = {
-            "revenue": income_data["revenue"],
-            "cogs": income_data["cogs"],
-            "operating_expenses": income_data["operating_expenses"],
-            "gross_profit": income_data["gross_profit"],
-            "net_profit": income_data["net_profit"],
-            "gross_margin": income_data["gross_margin"],
-            "category_breakdown": income_data["category_breakdown"]
-        }
+        storage[doc_type] = df
 
-        # Add cashflow if available
-        if "cashflow" in storage:
-            cashflow_data = process_cashflow(storage["cashflow"])
-            result["cashflow"] = cashflow_data
-
-        return result
+        return {"message": f"{doc_type} uploaded successfully"}
 
     except Exception as e:
         return {"error": str(e)}
+
+# -----------------------------
+# Financial Engine
+# -----------------------------
+def compute_financials():
+    if "income_statement" not in storage:
+        return {"error": "Upload income_statement first"}
+
+    df = storage["income_statement"]
+
+    # Revenue = positive values
+    revenue = df[df["amount"] > 0]["amount"].sum()
+
+    # COGS = items containing "cogs"
+    cogs = df[df["item"].str.lower().str.contains("cogs")]["amount"].abs().sum()
+
+    # Operating expenses = negative values excluding COGS
+    operating_expenses = df[
+        (df["amount"] < 0) &
+        (~df["item"].str.lower().str.contains("cogs"))
+    ]["amount"].abs().sum()
+
+    gross_profit = revenue - cogs
+    net_profit = revenue - cogs - operating_expenses
+
+    gross_margin = (gross_profit / revenue) if revenue > 0 else 0
+
+    category_breakdown = df.groupby("item")["amount"].sum().to_dict()
+
+    result = {
+        "revenue": float(revenue),
+        "cogs": float(cogs),
+        "operating_expenses": float(operating_expenses),
+        "gross_profit": float(gross_profit),
+        "net_profit": float(net_profit),
+        "gross_margin": round(gross_margin, 2),
+        "category_breakdown": category_breakdown
+    }
+
+    # -----------------------------
+    # Cashflow (optional)
+    # -----------------------------
+    if "cashflow" in storage:
+        cf = storage["cashflow"]
+
+        inflow = cf[cf["amount"] > 0]["amount"].sum()
+        outflow = cf[cf["amount"] < 0]["amount"].abs().sum()
+
+        result["cashflow"] = {
+            "net_cashflow": float(inflow - outflow)
+        }
+
+    return result
+
+# -----------------------------
+# Dashboard API
+# -----------------------------
+@app.get("/api/dashboard")
+def dashboard():
+    return compute_financials()
