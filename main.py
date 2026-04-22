@@ -1,4 +1,5 @@
 import os
+import json
 import pandas as pd
 from fastapi import FastAPI, UploadFile, Form
 from sqlalchemy import create_engine, text
@@ -6,7 +7,9 @@ from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
 
-# Allow frontend later
+# =========================
+# CORS (for frontend later)
+# =========================
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -25,7 +28,7 @@ engine = create_engine(
     connect_args={"sslmode": "require"}
 )
 
-# Create table
+# Create table if not exists
 with engine.connect() as conn:
     conn.execute(text("""
         CREATE TABLE IF NOT EXISTS uploads (
@@ -46,7 +49,7 @@ def detect_columns(df):
     amount_col = None
 
     for key in cols:
-        if "item" in key or "description" in key or "name" in key:
+        if "item" in key or "description" in key or "name" in key or "category" in key:
             item_col = cols[key]
         if "amount" in key or "value" in key or "total" in key:
             amount_col = cols[key]
@@ -64,8 +67,15 @@ def process_income(df):
     df[amount_col] = pd.to_numeric(df[amount_col], errors="coerce").fillna(0)
 
     revenue = df[df[amount_col] > 0][amount_col].sum()
-    cogs = abs(df[df[item_col].str.contains("COGS", case=False, na=False)][amount_col].sum())
-    expenses = abs(df[(df[amount_col] < 0) & (~df[item_col].str.contains("COGS", case=False, na=False))][amount_col].sum())
+
+    cogs = abs(
+        df[df[item_col].str.contains("cogs", case=False, na=False)][amount_col].sum()
+    )
+
+    expenses = abs(
+        df[(df[amount_col] < 0) &
+           (~df[item_col].str.contains("cogs", case=False, na=False))][amount_col].sum()
+    )
 
     gross_profit = revenue - cogs
     net_profit = gross_profit - expenses
@@ -102,9 +112,8 @@ def process_cashflow(df):
         "net_cashflow": float(inflow - outflow)
     }
 
-
 # =========================
-# API ENDPOINTS
+# ROUTES
 # =========================
 
 @app.get("/")
@@ -121,8 +130,8 @@ async def upload(file: UploadFile, doc_type: str = Form(...)):
     if doc_type not in ["income_statement", "expenses", "cashflow"]:
         return {"error": "Invalid doc_type"}
 
-    # Store raw data in DB
-    data = df.to_dict(orient="records")
+    # ✅ FIX: convert to JSON string
+    data = json.dumps(df.to_dict(orient="records"))
 
     with engine.connect() as conn:
         conn.execute(
@@ -137,7 +146,9 @@ async def upload(file: UploadFile, doc_type: str = Form(...)):
 @app.get("/api/dashboard")
 def dashboard():
     with engine.connect() as conn:
-        rows = conn.execute(text("SELECT doc_type, data FROM uploads")).fetchall()
+        rows = conn.execute(
+            text("SELECT doc_type, data FROM uploads ORDER BY id ASC")
+        ).fetchall()
 
     income_data = []
     cashflow_data = []
@@ -146,7 +157,8 @@ def dashboard():
         doc_type = row._mapping["doc_type"]
         data = row._mapping["data"]
 
-        df = pd.DataFrame(data)
+        # ✅ FIX: convert JSON string back to DataFrame
+        df = pd.DataFrame(json.loads(data))
 
         if doc_type == "income_statement":
             income_data.append(process_income(df))
@@ -157,7 +169,7 @@ def dashboard():
     if not income_data:
         return {"error": "Upload income_statement first"}
 
-    # Use latest
+    # Use latest uploaded data
     income = income_data[-1]
     cashflow = cashflow_data[-1] if cashflow_data else {}
 
