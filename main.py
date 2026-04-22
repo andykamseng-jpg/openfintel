@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 app = FastAPI()
 
 # =========================
-# CORS (for frontend later)
+# CORS
 # =========================
 app.add_middleware(
     CORSMiddleware,
@@ -28,7 +28,7 @@ engine = create_engine(
     connect_args={"sslmode": "require"}
 )
 
-# Create table if not exists
+# Create table
 with engine.connect() as conn:
     conn.execute(text("""
         CREATE TABLE IF NOT EXISTS uploads (
@@ -40,7 +40,7 @@ with engine.connect() as conn:
     conn.commit()
 
 # =========================
-# HELPER FUNCTIONS
+# HELPERS
 # =========================
 def detect_columns(df):
     cols = {c.lower(): c for c in df.columns}
@@ -49,9 +49,9 @@ def detect_columns(df):
     amount_col = None
 
     for key in cols:
-        if "item" in key or "description" in key or "name" in key or "category" in key:
+        if any(k in key for k in ["item", "description", "name", "category"]):
             item_col = cols[key]
-        if "amount" in key or "value" in key or "total" in key:
+        if any(k in key for k in ["amount", "value", "total"]):
             amount_col = cols[key]
 
     return item_col, amount_col
@@ -130,7 +130,7 @@ async def upload(file: UploadFile, doc_type: str = Form(...)):
     if doc_type not in ["income_statement", "expenses", "cashflow"]:
         return {"error": "Invalid doc_type"}
 
-    # ✅ FIX: convert to JSON string
+    # ✅ Convert to JSON string for DB
     data = json.dumps(df.to_dict(orient="records"))
 
     with engine.connect() as conn:
@@ -157,8 +157,13 @@ def dashboard():
         doc_type = row._mapping["doc_type"]
         data = row._mapping["data"]
 
-        # ✅ FIX: convert JSON string back to DataFrame
-        df = pd.DataFrame(json.loads(data))
+        # ✅ Handle BOTH string and JSON
+        if isinstance(data, str):
+            parsed = json.loads(data)
+        else:
+            parsed = data
+
+        df = pd.DataFrame(parsed)
 
         if doc_type == "income_statement":
             income_data.append(process_income(df))
@@ -169,7 +174,6 @@ def dashboard():
     if not income_data:
         return {"error": "Upload income_statement first"}
 
-    # Use latest uploaded data
     income = income_data[-1]
     cashflow = cashflow_data[-1] if cashflow_data else {}
 
