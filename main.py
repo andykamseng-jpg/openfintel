@@ -1,11 +1,12 @@
-from fastapi import FastAPI, UploadFile, File, Form
-from fastapi.middleware.cors import CORSMiddleware
+import os
 import pandas as pd
-import io
+from fastapi import FastAPI, UploadFile, Form
+from sqlalchemy import create_engine, text
+from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
 
-# Allow frontend access
+# Allow frontend later
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -14,125 +15,153 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# In-memory storage (for now)
-storage = {}
+# =========================
+# DATABASE (Neon)
+# =========================
+DATABASE_URL = os.getenv("DATABASE_URL")
 
-# -----------------------------
-# Utility: Flexible CSV parser
-# -----------------------------
-def load_csv(file: UploadFile):
-    content = file.file.read()
-    df = pd.read_csv(io.BytesIO(content))
+engine = create_engine(
+    DATABASE_URL,
+    connect_args={"sslmode": "require"}
+)
 
-    # Normalize column names
-    df.columns = [c.strip().lower() for c in df.columns]
+# Create table
+with engine.connect() as conn:
+    conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS uploads (
+            id SERIAL PRIMARY KEY,
+            doc_type TEXT,
+            data JSONB
+        )
+    """))
+    conn.commit()
 
-    # Try to map columns automatically
-    col_map = {}
+# =========================
+# HELPER FUNCTIONS
+# =========================
+def detect_columns(df):
+    cols = {c.lower(): c for c in df.columns}
 
-    for col in df.columns:
-        if "item" in col or "name" in col or "category" in col:
-            col_map["item"] = col
-        if "amount" in col or "value" in col or "total" in col:
-            col_map["amount"] = col
+    item_col = None
+    amount_col = None
 
-    if "item" not in col_map or "amount" not in col_map:
-        raise ValueError("CSV must contain identifiable item and amount columns")
+    for key in cols:
+        if "item" in key or "description" in key or "name" in key:
+            item_col = cols[key]
+        if "amount" in key or "value" in key or "total" in key:
+            amount_col = cols[key]
 
-    df = df.rename(columns={
-        col_map["item"]: "item",
-        col_map["amount"]: "amount"
-    })
+    return item_col, amount_col
 
-    df["amount"] = pd.to_numeric(df["amount"], errors="coerce").fillna(0)
 
-    return df
+def process_income(df):
+    item_col, amount_col = detect_columns(df)
 
-# -----------------------------
-# Upload API
-# -----------------------------
-@app.post("/api/upload")
-async def upload_file(
-    file: UploadFile = File(...),
-    doc_type: str = Form(...)
-):
-    try:
-        df = load_csv(file)
+    if not item_col or not amount_col:
+        return {"error": "Cannot detect columns"}
 
-        valid_types = [
-            "income_statement",
-            "expenses",
-            "cashflow",
-            "balance_sheet",
-            "general_ledger"
-        ]
+    df = df[[item_col, amount_col]].dropna()
+    df[amount_col] = pd.to_numeric(df[amount_col], errors="coerce").fillna(0)
 
-        if doc_type not in valid_types:
-            return {"error": "Invalid doc_type"}
-
-        storage[doc_type] = df
-
-        return {"message": f"{doc_type} uploaded successfully"}
-
-    except Exception as e:
-        return {"error": str(e)}
-
-# -----------------------------
-# Financial Engine
-# -----------------------------
-def compute_financials():
-    if "income_statement" not in storage:
-        return {"error": "Upload income_statement first"}
-
-    df = storage["income_statement"]
-
-    # Revenue = positive values
-    revenue = df[df["amount"] > 0]["amount"].sum()
-
-    # COGS = items containing "cogs"
-    cogs = df[df["item"].str.lower().str.contains("cogs")]["amount"].abs().sum()
-
-    # Operating expenses = negative values excluding COGS
-    operating_expenses = df[
-        (df["amount"] < 0) &
-        (~df["item"].str.lower().str.contains("cogs"))
-    ]["amount"].abs().sum()
+    revenue = df[df[amount_col] > 0][amount_col].sum()
+    cogs = abs(df[df[item_col].str.contains("COGS", case=False, na=False)][amount_col].sum())
+    expenses = abs(df[(df[amount_col] < 0) & (~df[item_col].str.contains("COGS", case=False, na=False))][amount_col].sum())
 
     gross_profit = revenue - cogs
-    net_profit = revenue - cogs - operating_expenses
+    net_profit = gross_profit - expenses
+    margin = (gross_profit / revenue) if revenue else 0
 
-    gross_margin = (gross_profit / revenue) if revenue > 0 else 0
+    breakdown = df.groupby(item_col)[amount_col].sum().to_dict()
 
-    category_breakdown = df.groupby("item")["amount"].sum().to_dict()
-
-    result = {
+    return {
         "revenue": float(revenue),
         "cogs": float(cogs),
-        "operating_expenses": float(operating_expenses),
+        "operating_expenses": float(expenses),
         "gross_profit": float(gross_profit),
         "net_profit": float(net_profit),
-        "gross_margin": round(gross_margin, 2),
-        "category_breakdown": category_breakdown
+        "gross_margin": round(margin, 2),
+        "category_breakdown": breakdown
     }
 
-    # -----------------------------
-    # Cashflow (optional)
-    # -----------------------------
-    if "cashflow" in storage:
-        cf = storage["cashflow"]
 
-        inflow = cf[cf["amount"] > 0]["amount"].sum()
-        outflow = cf[cf["amount"] < 0]["amount"].abs().sum()
+def process_cashflow(df):
+    item_col, amount_col = detect_columns(df)
 
-        result["cashflow"] = {
-            "net_cashflow": float(inflow - outflow)
-        }
+    if not item_col or not amount_col:
+        return {"error": "Cannot detect columns"}
 
-    return result
+    df = df[[item_col, amount_col]].dropna()
+    df[amount_col] = pd.to_numeric(df[amount_col], errors="coerce").fillna(0)
 
-# -----------------------------
-# Dashboard API
-# -----------------------------
+    inflow = df[df[amount_col] > 0][amount_col].sum()
+    outflow = abs(df[df[amount_col] < 0][amount_col].sum())
+
+    return {
+        "cash_in": float(inflow),
+        "cash_out": float(outflow),
+        "net_cashflow": float(inflow - outflow)
+    }
+
+
+# =========================
+# API ENDPOINTS
+# =========================
+
+@app.get("/")
+def root():
+    return {"message": "OpenFintel API is running 🚀"}
+
+
+@app.post("/api/upload")
+async def upload(file: UploadFile, doc_type: str = Form(...)):
+    df = pd.read_csv(file.file)
+
+    doc_type = doc_type.lower()
+
+    if doc_type not in ["income_statement", "expenses", "cashflow"]:
+        return {"error": "Invalid doc_type"}
+
+    # Store raw data in DB
+    data = df.to_dict(orient="records")
+
+    with engine.connect() as conn:
+        conn.execute(
+            text("INSERT INTO uploads (doc_type, data) VALUES (:doc_type, :data)"),
+            {"doc_type": doc_type, "data": data}
+        )
+        conn.commit()
+
+    return {"message": f"{doc_type} uploaded successfully"}
+
+
 @app.get("/api/dashboard")
 def dashboard():
-    return compute_financials()
+    with engine.connect() as conn:
+        rows = conn.execute(text("SELECT doc_type, data FROM uploads")).fetchall()
+
+    income_data = []
+    cashflow_data = []
+
+    for row in rows:
+        doc_type = row._mapping["doc_type"]
+        data = row._mapping["data"]
+
+        df = pd.DataFrame(data)
+
+        if doc_type == "income_statement":
+            income_data.append(process_income(df))
+
+        elif doc_type == "cashflow":
+            cashflow_data.append(process_cashflow(df))
+
+    if not income_data:
+        return {"error": "Upload income_statement first"}
+
+    # Use latest
+    income = income_data[-1]
+    cashflow = cashflow_data[-1] if cashflow_data else {}
+
+    return {
+        **income,
+        "cashflow": cashflow
+    }
