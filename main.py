@@ -1,186 +1,132 @@
-import os
-import json
-import pandas as pd
 from fastapi import FastAPI, UploadFile, Form
-from sqlalchemy import create_engine, text
 from fastapi.middleware.cors import CORSMiddleware
+import pandas as pd
+from sqlalchemy import create_engine, text
+import os
+from datetime import datetime
 
 app = FastAPI()
 
-# =========================
-# CORS
-# =========================
+# CORS (allow your Vercel frontend)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],  # tighten later
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# =========================
-# DATABASE (Neon)
-# =========================
 DATABASE_URL = os.getenv("DATABASE_URL")
+engine = create_engine(DATABASE_URL)
 
-if not DATABASE_URL:
-    raise ValueError("DATABASE_URL is not set")
-
-engine = create_engine(
-    DATABASE_URL,
-    connect_args={"sslmode": "require"}
-)
-
-# Create table
-with engine.connect() as conn:
-    conn.execute(text("""
-        CREATE TABLE IF NOT EXISTS uploads (
-            id SERIAL PRIMARY KEY,
-            doc_type TEXT,
-            data JSONB
-        )
-    """))
-    conn.commit()
-
-# =========================
-# HELPERS
-# =========================
-def detect_columns(df):
-    cols = {c.lower(): c for c in df.columns}
-
-    item_col = None
-    amount_col = None
-
-    for key in cols:
-        if any(k in key for k in ["item", "description", "name", "category"]):
-            item_col = cols[key]
-        if any(k in key for k in ["amount", "value", "total"]):
-            amount_col = cols[key]
-
-    return item_col, amount_col
-
-
-def process_income(df):
-    item_col, amount_col = detect_columns(df)
-
-    if not item_col or not amount_col:
-        return {"error": "Cannot detect columns"}
-
-    df = df[[item_col, amount_col]].dropna()
-    df[amount_col] = pd.to_numeric(df[amount_col], errors="coerce").fillna(0)
-
-    revenue = df[df[amount_col] > 0][amount_col].sum()
-
-    cogs = abs(
-        df[df[item_col].str.contains("cogs", case=False, na=False)][amount_col].sum()
-    )
-
-    expenses = abs(
-        df[(df[amount_col] < 0) &
-           (~df[item_col].str.contains("cogs", case=False, na=False))][amount_col].sum()
-    )
-
-    gross_profit = revenue - cogs
-    net_profit = gross_profit - expenses
-    margin = (gross_profit / revenue) if revenue else 0
-
-    breakdown = df.groupby(item_col)[amount_col].sum().to_dict()
-
-    return {
-        "revenue": float(revenue),
-        "cogs": float(cogs),
-        "operating_expenses": float(expenses),
-        "gross_profit": float(gross_profit),
-        "net_profit": float(net_profit),
-        "gross_margin": round(margin, 2),
-        "category_breakdown": breakdown
-    }
-
-
-def process_cashflow(df):
-    item_col, amount_col = detect_columns(df)
-
-    if not item_col or not amount_col:
-        return {"error": "Cannot detect columns"}
-
-    df = df[[item_col, amount_col]].dropna()
-    df[amount_col] = pd.to_numeric(df[amount_col], errors="coerce").fillna(0)
-
-    inflow = df[df[amount_col] > 0][amount_col].sum()
-    outflow = abs(df[df[amount_col] < 0][amount_col].sum())
-
-    return {
-        "cash_in": float(inflow),
-        "cash_out": float(outflow),
-        "net_cashflow": float(inflow - outflow)
-    }
-
-# =========================
-# ROUTES
-# =========================
 
 @app.get("/")
 def root():
     return {"message": "OpenFintel API is running 🚀"}
 
 
+# 📤 UPLOAD + DATE MERGE LOGIC
 @app.post("/api/upload")
 async def upload(file: UploadFile, doc_type: str = Form(...)):
     df = pd.read_csv(file.file)
 
-    doc_type = doc_type.lower()
+    df["Date"] = pd.to_datetime(df["Date"])
 
-    if doc_type not in ["income_statement", "expenses", "cashflow"]:
-        return {"error": "Invalid doc_type"}
+    start_date = df["Date"].min()
+    end_date = df["Date"].max()
 
-    # ✅ Convert to JSON string for DB
-    data = json.dumps(df.to_dict(orient="records"))
+    data = df.to_dict(orient="records")
 
-    with engine.connect() as conn:
+    with engine.begin() as conn:
+        # 🔥 DELETE overlapping data (core logic)
         conn.execute(
-            text("INSERT INTO uploads (doc_type, data) VALUES (:doc_type, :data)"),
-            {"doc_type": doc_type, "data": data}
+            text("""
+                DELETE FROM financial_data
+                WHERE date BETWEEN :start AND :end
+                AND doc_type = :doc_type
+            """),
+            {"start": start_date, "end": end_date, "doc_type": doc_type}
         )
-        conn.commit()
 
-    return {"message": f"{doc_type} uploaded successfully"}
+        # INSERT new data
+        for row in data:
+            conn.execute(
+                text("""
+                    INSERT INTO financial_data (date, description, category, amount, doc_type)
+                    VALUES (:date, :desc, :cat, :amt, :doc)
+                """),
+                {
+                    "date": row["Date"],
+                    "desc": row.get("Description", ""),
+                    "cat": row.get("Category", ""),
+                    "amt": row.get("Amount", 0),
+                    "doc": doc_type
+                }
+            )
+
+        # Track file
+        conn.execute(
+            text("""
+                INSERT INTO uploaded_files (file_name, doc_type, start_date, end_date)
+                VALUES (:name, :doc, :start, :end)
+            """),
+            {
+                "name": file.filename,
+                "doc": doc_type,
+                "start": start_date,
+                "end": end_date
+            }
+        )
+
+    return {"message": f"{doc_type} uploaded with merge logic"}
 
 
+# 📊 DASHBOARD
 @app.get("/api/dashboard")
 def dashboard():
     with engine.connect() as conn:
-        rows = conn.execute(
-            text("SELECT doc_type, data FROM uploads ORDER BY id ASC")
-        ).fetchall()
+        rows = conn.execute(text("SELECT * FROM financial_data")).fetchall()
 
-    income_data = []
-    cashflow_data = []
+    if not rows:
+        return {"error": "No data"}
 
-    for row in rows:
-        doc_type = row._mapping["doc_type"]
-        data = row._mapping["data"]
+    df = pd.DataFrame(rows, columns=rows[0].keys())
 
-        # ✅ Handle BOTH string and JSON
-        if isinstance(data, str):
-            parsed = json.loads(data)
-        else:
-            parsed = data
-
-        df = pd.DataFrame(parsed)
-
-        if doc_type == "income_statement":
-            income_data.append(process_income(df))
-
-        elif doc_type == "cashflow":
-            cashflow_data.append(process_cashflow(df))
-
-    if not income_data:
-        return {"error": "Upload income_statement first"}
-
-    income = income_data[-1]
-    cashflow = cashflow_data[-1] if cashflow_data else {}
+    revenue = df[df["amount"] > 0]["amount"].sum()
+    expenses = df[df["amount"] < 0]["amount"].sum()
 
     return {
-        **income,
-        "cashflow": cashflow
+        "revenue": float(revenue),
+        "expenses": float(abs(expenses)),
+        "net_profit": float(revenue + expenses),
+        "gross_margin": float((revenue + expenses) / revenue) if revenue else 0
     }
+
+
+# 📁 FILE LIST
+@app.get("/api/files")
+def files():
+    with engine.connect() as conn:
+        rows = conn.execute(text("SELECT * FROM uploaded_files ORDER BY uploaded_at DESC")).fetchall()
+
+    return {"data": [dict(row._mapping) for row in rows]}
+
+
+# 📅 COVERAGE
+@app.get("/api/coverage")
+def coverage():
+    with engine.connect() as conn:
+        rows = conn.execute(text("SELECT DISTINCT date FROM financial_data")).fetchall()
+
+    dates = {r[0].strftime("%Y-%m-%d") for r in rows}
+
+    full_year = pd.date_range("2024-01-01", "2024-12-31")
+
+    result = []
+    for d in full_year:
+        result.append({
+            "date": d.strftime("%Y-%m-%d"),
+            "exists": d.strftime("%Y-%m-%d") in dates
+        })
+
+    return {"data": result}
