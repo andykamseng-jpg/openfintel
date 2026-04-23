@@ -6,7 +6,7 @@ import os
 
 app = FastAPI()
 
-# ✅ CORS (allow your frontend)
+# ✅ CORS (allow frontend)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # tighten later
@@ -20,12 +20,13 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 engine = create_engine(DATABASE_URL)
 
 
+# 🏠 ROOT
 @app.get("/")
 def root():
     return {"message": "OpenFintel API is running 🚀"}
 
 
-# 📤 UPLOAD + DATE MERGE
+# 📤 UPLOAD (UPSERT LOGIC)
 @app.post("/api/upload")
 async def upload(file: UploadFile, doc_type: str = Form(...)):
     df = pd.read_csv(file.file)
@@ -40,22 +41,16 @@ async def upload(file: UploadFile, doc_type: str = Form(...)):
     data = df.to_dict(orient="records")
 
     with engine.begin() as conn:
-        # 🔥 CORE: remove overlapping dates
-        conn.execute(
-            text("""
-                DELETE FROM financial_data
-                WHERE date BETWEEN :start AND :end
-                AND doc_type = :doc_type
-            """),
-            {"start": start_date, "end": end_date, "doc_type": doc_type}
-        )
-
-        # Insert new rows
         for row in data:
             conn.execute(
                 text("""
                     INSERT INTO financial_data (date, description, category, amount, doc_type)
                     VALUES (:date, :desc, :cat, :amt, :doc)
+                    ON CONFLICT (date, doc_type)
+                    DO UPDATE SET
+                        description = EXCLUDED.description,
+                        category = EXCLUDED.category,
+                        amount = EXCLUDED.amount
                 """),
                 {
                     "date": row["Date"],
@@ -66,7 +61,7 @@ async def upload(file: UploadFile, doc_type: str = Form(...)):
                 }
             )
 
-        # Track file
+        # Track uploaded file
         conn.execute(
             text("""
                 INSERT INTO uploaded_files (file_name, doc_type, start_date, end_date)
@@ -80,35 +75,23 @@ async def upload(file: UploadFile, doc_type: str = Form(...)):
             }
         )
 
-    return {"message": f"{doc_type} uploaded successfully with merge logic"}
+    return {"message": f"{doc_type} uploaded with upsert logic"}
 
 
-# 📊 DASHBOARD (FIXED)
+# 📊 DASHBOARD
 @app.get("/api/dashboard")
 def dashboard():
     try:
         with engine.connect() as conn:
-            result = conn.execute(text("""
-                SELECT date, description, category, amount
-                FROM financial_data
-            """))
+            result = conn.execute(
+                text("SELECT date, description, category, amount FROM financial_data")
+            )
             rows = result.fetchall()
 
         if not rows:
             return {"error": "No data"}
 
-        # ✅ Safe conversion
-        data = []
-        for r in rows:
-            row = dict(r._mapping)
-            if row.get("amount") is None:
-                continue
-            data.append(row)
-
-        df = pd.DataFrame(data)
-
-        if df.empty:
-            return {"error": "No valid data"}
+        df = pd.DataFrame([dict(r._mapping) for r in rows])
 
         # Ensure numeric
         df["amount"] = pd.to_numeric(df["amount"], errors="coerce")
