@@ -15,7 +15,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ✅ Database
+# ✅ Database connection
 DATABASE_URL = os.getenv("DATABASE_URL")
 engine = create_engine(DATABASE_URL)
 
@@ -26,56 +26,61 @@ def root():
     return {"message": "OpenFintel API is running 🚀"}
 
 
-# 📤 UPLOAD (UPSERT LOGIC)
+# 📤 UPLOAD (FINAL UPSERT LOGIC)
 @app.post("/api/upload")
 async def upload(file: UploadFile, doc_type: str = Form(...)):
-    df = pd.read_csv(file.file)
+    try:
+        df = pd.read_csv(file.file)
 
-    # Normalize
-    df["Date"] = pd.to_datetime(df["Date"])
-    df = df.fillna("")
+        # Normalize
+        df["Date"] = pd.to_datetime(df["Date"])
+        df = df.fillna("")
 
-    start_date = df["Date"].min()
-    end_date = df["Date"].max()
+        start_date = df["Date"].min()
+        end_date = df["Date"].max()
 
-    data = df.to_dict(orient="records")
+        data = df.to_dict(orient="records")
 
-    with engine.begin() as conn:
-        for row in data:
+        with engine.begin() as conn:
+            for row in data:
+                conn.execute(
+                    text("""
+                        INSERT INTO financial_data 
+                        (date, description, category, amount, doc_type)
+                        VALUES (:date, :desc, :cat, :amt, :doc)
+                        ON CONFLICT (date, description, doc_type)
+                        DO UPDATE SET
+                            category = EXCLUDED.category,
+                            amount = EXCLUDED.amount
+                    """),
+                    {
+                        "date": row["Date"],
+                        "desc": row.get("Description", ""),
+                        "cat": row.get("Category", ""),
+                        "amt": float(row.get("Amount", 0)),
+                        "doc": doc_type
+                    }
+                )
+
+            # Track upload
             conn.execute(
                 text("""
-                    INSERT INTO financial_data (date, description, category, amount, doc_type)
-                    VALUES (:date, :desc, :cat, :amt, :doc)
-                    ON CONFLICT (date, doc_type)
-                    DO UPDATE SET
-                        description = EXCLUDED.description,
-                        category = EXCLUDED.category,
-                        amount = EXCLUDED.amount
+                    INSERT INTO uploaded_files 
+                    (file_name, doc_type, start_date, end_date)
+                    VALUES (:name, :doc, :start, :end)
                 """),
                 {
-                    "date": row["Date"],
-                    "desc": row.get("Description", ""),
-                    "cat": row.get("Category", ""),
-                    "amt": float(row.get("Amount", 0)),
-                    "doc": doc_type
+                    "name": file.filename,
+                    "doc": doc_type,
+                    "start": start_date,
+                    "end": end_date
                 }
             )
 
-        # Track uploaded file
-        conn.execute(
-            text("""
-                INSERT INTO uploaded_files (file_name, doc_type, start_date, end_date)
-                VALUES (:name, :doc, :start, :end)
-            """),
-            {
-                "name": file.filename,
-                "doc": doc_type,
-                "start": start_date,
-                "end": end_date
-            }
-        )
+        return {"message": f"{doc_type} uploaded with upsert logic"}
 
-    return {"message": f"{doc_type} uploaded with upsert logic"}
+    except Exception as e:
+        return {"error": str(e)}
 
 
 # 📊 DASHBOARD
@@ -93,7 +98,6 @@ def dashboard():
 
         df = pd.DataFrame([dict(r._mapping) for r in rows])
 
-        # Ensure numeric
         df["amount"] = pd.to_numeric(df["amount"], errors="coerce")
         df = df.dropna(subset=["amount"])
 
