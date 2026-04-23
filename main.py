@@ -26,22 +26,30 @@ def root():
     return {"message": "OpenFintel API is running 🚀"}
 
 
-# 📤 UPLOAD (FINAL FIXED VERSION)
+# 📤 UPLOAD (FINAL CLEAN + UPSERT)
 @app.post("/api/upload")
 async def upload(file: UploadFile, doc_type: str = Form(...)):
     try:
         df = pd.read_csv(file.file)
 
-        # ✅ CLEAN DATA PROPERLY
-        df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
-        df["Amount"] = pd.to_numeric(df["Amount"], errors="coerce")
+        # ✅ Normalize core fields
+        df["Date"] = pd.to_datetime(df.get("Date"), errors="coerce")
+        df["Amount"] = pd.to_numeric(df.get("Amount"), errors="coerce")
 
-        # 🔥 remove bad rows (THIS FIXES YOUR ERROR)
-        df = df.dropna(subset=["Date", "Amount"])
+        # ✅ Normalize text fields EARLY
+        df["Description"] = df.get("Description", "").astype(str).str.strip().str.lower()
+        df["Category"] = df.get("Category", "").astype(str).str.strip().str.lower()
 
-        # optional fields
-        df["Description"] = df.get("Description", "").fillna("")
-        df["Category"] = df.get("Category", "").fillna("")
+        # 🔥 STRICT CLEANING (fix your issue)
+        df = df[
+            (df["Date"].notna()) &
+            (df["Amount"].notna()) &
+            (df["Description"] != "") &
+            (df["Amount"] != 0)   # optional: remove zero junk rows
+        ]
+
+        if df.empty:
+            return {"error": "No valid data after cleaning"}
 
         start_date = df["Date"].min()
         end_date = df["Date"].max()
@@ -84,7 +92,7 @@ async def upload(file: UploadFile, doc_type: str = Form(...)):
                 }
             )
 
-        return {"message": f"{doc_type} uploaded with upsert logic"}
+        return {"message": f"{doc_type} uploaded with clean upsert logic"}
 
     except Exception as e:
         return {"error": str(e)}
