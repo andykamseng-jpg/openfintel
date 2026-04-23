@@ -26,19 +26,19 @@ def root():
     return {"message": "OpenFintel API is running 🚀"}
 
 
-# 📤 UPLOAD (FINAL FINAL)
+# 📤 UPLOAD (FINAL CORRECT LOGIC)
 @app.post("/api/upload")
 async def upload(file: UploadFile, doc_type: str = Form(...)):
     try:
         df = pd.read_csv(file.file)
 
         # =========================
-        # 🔥 STEP 1: DROP TRUE EMPTY ROWS
+        # STEP 1: DROP EMPTY ROWS
         # =========================
         df = df.dropna(how="all")
 
         # =========================
-        # 🔥 STEP 2: NORMALIZE FIELDS
+        # STEP 2: NORMALIZE DATA
         # =========================
         df["Date"] = pd.to_datetime(df.get("Date"), errors="coerce")
         df["Amount"] = pd.to_numeric(df.get("Amount"), errors="coerce")
@@ -46,7 +46,7 @@ async def upload(file: UploadFile, doc_type: str = Form(...)):
         df["Description"] = (
             df.get("Description", "")
             .astype(str)
-            .str.replace(r"\s+", " ", regex=True)  # normalize spaces
+            .str.replace(r"\s+", " ", regex=True)
             .str.strip()
             .str.lower()
         )
@@ -60,13 +60,13 @@ async def upload(file: UploadFile, doc_type: str = Form(...)):
         )
 
         # =========================
-        # 🔥 STEP 3: STRICT FILTER (CRITICAL)
+        # STEP 3: STRICT FILTER
         # =========================
         df = df[
             df["Date"].notna() &
             df["Amount"].notna() &
-            (df["Description"] != "") &
-            (df["Description"] != "nan") &
+            (df["Category"] != "") &
+            (df["Category"] != "nan") &
             (df["Amount"].abs() > 0.000001)
         ]
 
@@ -79,7 +79,7 @@ async def upload(file: UploadFile, doc_type: str = Form(...)):
         records = df.to_dict(orient="records")
 
         # =========================
-        # 🔥 STEP 4: UPSERT
+        # STEP 4: UPSERT (FIXED KEY)
         # =========================
         with engine.begin() as conn:
             for row in records:
@@ -88,9 +88,9 @@ async def upload(file: UploadFile, doc_type: str = Form(...)):
                         INSERT INTO financial_data
                         (date, description, category, amount, doc_type)
                         VALUES (:date, :desc, :cat, :amt, :doc)
-                        ON CONFLICT (date, description, doc_type)
+                        ON CONFLICT (date, category, doc_type)
                         DO UPDATE SET
-                            category = EXCLUDED.category,
+                            description = EXCLUDED.description,
                             amount = EXCLUDED.amount
                     """),
                     {
@@ -117,7 +117,7 @@ async def upload(file: UploadFile, doc_type: str = Form(...)):
                 }
             )
 
-        return {"message": f"{doc_type} uploaded (clean + stable)"}
+        return {"message": f"{doc_type} uploaded (correct upsert key)"}
 
     except Exception as e:
         return {"error": str(e)}
