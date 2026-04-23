@@ -6,7 +6,7 @@ import os
 
 app = FastAPI()
 
-# ✅ CORS (allow frontend)
+# ✅ CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # tighten later
@@ -15,7 +15,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ✅ Database connection
+# ✅ DB
 DATABASE_URL = os.getenv("DATABASE_URL")
 engine = create_engine(DATABASE_URL)
 
@@ -26,26 +26,33 @@ def root():
     return {"message": "OpenFintel API is running 🚀"}
 
 
-# 📤 UPLOAD (FINAL UPSERT LOGIC)
+# 📤 UPLOAD (FINAL FIXED VERSION)
 @app.post("/api/upload")
 async def upload(file: UploadFile, doc_type: str = Form(...)):
     try:
         df = pd.read_csv(file.file)
 
-        # Normalize
-        df["Date"] = pd.to_datetime(df["Date"])
-        df = df.fillna("")
+        # ✅ CLEAN DATA PROPERLY
+        df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+        df["Amount"] = pd.to_numeric(df["Amount"], errors="coerce")
+
+        # 🔥 remove bad rows (THIS FIXES YOUR ERROR)
+        df = df.dropna(subset=["Date", "Amount"])
+
+        # optional fields
+        df["Description"] = df.get("Description", "").fillna("")
+        df["Category"] = df.get("Category", "").fillna("")
 
         start_date = df["Date"].min()
         end_date = df["Date"].max()
 
-        data = df.to_dict(orient="records")
+        records = df.to_dict(orient="records")
 
         with engine.begin() as conn:
-            for row in data:
+            for row in records:
                 conn.execute(
                     text("""
-                        INSERT INTO financial_data 
+                        INSERT INTO financial_data
                         (date, description, category, amount, doc_type)
                         VALUES (:date, :desc, :cat, :amt, :doc)
                         ON CONFLICT (date, description, doc_type)
@@ -55,17 +62,17 @@ async def upload(file: UploadFile, doc_type: str = Form(...)):
                     """),
                     {
                         "date": row["Date"],
-                        "desc": row.get("Description", ""),
-                        "cat": row.get("Category", ""),
-                        "amt": float(row.get("Amount", 0)),
+                        "desc": row["Description"],
+                        "cat": row["Category"],
+                        "amt": float(row["Amount"]),
                         "doc": doc_type
                     }
                 )
 
-            # Track upload
+            # track upload
             conn.execute(
                 text("""
-                    INSERT INTO uploaded_files 
+                    INSERT INTO uploaded_files
                     (file_name, doc_type, start_date, end_date)
                     VALUES (:name, :doc, :start, :end)
                 """),
@@ -88,21 +95,16 @@ async def upload(file: UploadFile, doc_type: str = Form(...)):
 def dashboard():
     try:
         with engine.connect() as conn:
-            result = conn.execute(
-                text("SELECT date, description, category, amount FROM financial_data")
-            )
+            result = conn.execute(text("SELECT amount FROM financial_data"))
             rows = result.fetchall()
 
         if not rows:
             return {"error": "No data"}
 
-        df = pd.DataFrame([dict(r._mapping) for r in rows])
+        amounts = [r[0] for r in rows if r[0] is not None]
 
-        df["amount"] = pd.to_numeric(df["amount"], errors="coerce")
-        df = df.dropna(subset=["amount"])
-
-        revenue = df[df["amount"] > 0]["amount"].sum()
-        expenses = df[df["amount"] < 0]["amount"].sum()
+        revenue = sum(a for a in amounts if a > 0)
+        expenses = sum(a for a in amounts if a < 0)
 
         return {
             "revenue": float(revenue),
@@ -118,34 +120,42 @@ def dashboard():
 # 📁 FILE LIST
 @app.get("/api/files")
 def get_files():
-    with engine.connect() as conn:
-        result = conn.execute(
-            text("SELECT * FROM uploaded_files ORDER BY uploaded_at DESC")
-        )
-        rows = result.fetchall()
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(
+                text("SELECT * FROM uploaded_files ORDER BY uploaded_at DESC")
+            )
+            rows = result.fetchall()
 
-    return {"data": [dict(r._mapping) for r in rows]}
+        return {"data": [dict(r._mapping) for r in rows]}
+
+    except Exception as e:
+        return {"error": str(e)}
 
 
-# 📅 COVERAGE TRACKER
+# 📅 COVERAGE
 @app.get("/api/coverage")
 def coverage():
-    with engine.connect() as conn:
-        result = conn.execute(text("SELECT DISTINCT date FROM financial_data"))
-        rows = result.fetchall()
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(text("SELECT DISTINCT date FROM financial_data"))
+            rows = result.fetchall()
 
-    if not rows:
-        return {"data": []}
+        if not rows:
+            return {"data": []}
 
-    existing_dates = {r[0].strftime("%Y-%m-%d") for r in rows}
+        existing = {r[0].strftime("%Y-%m-%d") for r in rows}
+        full = pd.date_range("2024-01-01", "2024-12-31")
 
-    full_range = pd.date_range("2024-01-01", "2024-12-31")
+        return {
+            "data": [
+                {
+                    "date": d.strftime("%Y-%m-%d"),
+                    "exists": d.strftime("%Y-%m-%d") in existing
+                }
+                for d in full
+            ]
+        }
 
-    coverage_data = []
-    for d in full_range:
-        coverage_data.append({
-            "date": d.strftime("%Y-%m-%d"),
-            "exists": d.strftime("%Y-%m-%d") in existing_dates
-        })
-
-    return {"data": coverage_data}
+    except Exception as e:
+        return {"error": str(e)}
