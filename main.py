@@ -9,7 +9,7 @@ app = FastAPI()
 # ✅ CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # tighten later
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -26,26 +26,26 @@ def root():
     return {"message": "OpenFintel API is running 🚀"}
 
 
-# 📤 UPLOAD (FINAL CLEAN + UPSERT)
+# 📤 UPLOAD (FINAL FIXED)
 @app.post("/api/upload")
 async def upload(file: UploadFile, doc_type: str = Form(...)):
     try:
         df = pd.read_csv(file.file)
 
-        # ✅ Normalize core fields
+        # ✅ Normalize fields
         df["Date"] = pd.to_datetime(df.get("Date"), errors="coerce")
         df["Amount"] = pd.to_numeric(df.get("Amount"), errors="coerce")
 
-        # ✅ Normalize text fields EARLY
+        # ✅ Normalize text
         df["Description"] = df.get("Description", "").astype(str).str.strip().str.lower()
         df["Category"] = df.get("Category", "").astype(str).str.strip().str.lower()
 
-        # 🔥 STRICT CLEANING (fix your issue)
+        # 🔥 FINAL STRICT CLEANING (KEY FIX)
         df = df[
             (df["Date"].notna()) &
             (df["Amount"].notna()) &
-            (df["Description"] != "") &
-            (df["Amount"] != 0)   # optional: remove zero junk rows
+            (df["Description"].str.len() > 2) &   # removes blank/garbage rows
+            (df["Amount"] != 0)                  # removes fake zero rows
         ]
 
         if df.empty:
@@ -77,7 +77,7 @@ async def upload(file: UploadFile, doc_type: str = Form(...)):
                     }
                 )
 
-            # track upload
+            # track uploads
             conn.execute(
                 text("""
                     INSERT INTO uploaded_files
@@ -92,7 +92,7 @@ async def upload(file: UploadFile, doc_type: str = Form(...)):
                 }
             )
 
-        return {"message": f"{doc_type} uploaded with clean upsert logic"}
+        return {"message": f"{doc_type} uploaded with final clean upsert"}
 
     except Exception as e:
         return {"error": str(e)}
