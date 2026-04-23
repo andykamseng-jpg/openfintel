@@ -1,15 +1,16 @@
-import axios from "axios";
+const BASE_URL = "https://openfintel.onrender.com";
 
-const API = "https://openfintel.onrender.com";
+export async function getDashboard() {
+  const res = await fetch(`${BASE_URL}/api/dashboard`);
+  return res.json();
+}
 
-export const uploadFile = (formData: FormData) =>
-  axios.post(`${API}/api/upload`, formData);
+export async function getFiles() {
+  const res = await fetch(`${BASE_URL}/api/files`);
+  return res.json();
+}
 
-export const getDashboard = () =>
-  axios.get(`${API}/api/dashboard`);
-
-export const getFiles = () =>
-  axios.get(`${API}/api/files`);
-
-export const getCoverage = () =>
-  axios.get(`${API}/api/coverage`);
+export async function getCoverage() {
+  const res = await fetch(`${BASE_URL}/api/coverage`);
+  return res.json();
+}

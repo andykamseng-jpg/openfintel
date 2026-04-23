@@ -25,8 +25,8 @@ export default function Home() {
         setFiles(fileList?.data || []);
         setCoverage(cov?.data || []);
       } catch (err) {
-        console.error("API error:", err);
-        setData({ error: "Failed to load data" });
+        console.error(err);
+        setData({ error: true });
       } finally {
         setLoading(false);
       }
@@ -35,30 +35,20 @@ export default function Home() {
     load();
   }, []);
 
-  // 🔄 Loading state
-  if (loading) {
-    return <div className="p-6">Loading dashboard...</div>;
-  }
+  if (loading) return <div className="p-6">Loading...</div>;
 
-  // ❌ Error or no data
   if (!data || data.error) {
     return (
       <div>
         <Navbar />
         <div className="p-6">
-          <h2 className="text-xl font-semibold">No data yet</h2>
-          <p className="text-gray-500 mt-2">
-            Upload an income statement to get started.
-          </p>
-          <div className="mt-6">
-            <UploadPanel />
-          </div>
+          <h2>No data yet</h2>
+          <UploadPanel />
         </div>
       </div>
     );
   }
 
-  // ✅ Normal UI
   return (
     <div>
       <Navbar />
