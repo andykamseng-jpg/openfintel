@@ -3,11 +3,10 @@ from fastapi.middleware.cors import CORSMiddleware
 import pandas as pd
 from sqlalchemy import create_engine, text
 import os
-from datetime import datetime
 
 app = FastAPI()
 
-# CORS (allow your Vercel frontend)
+# ✅ CORS (allow your frontend)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # tighten later
@@ -16,6 +15,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ✅ Database
 DATABASE_URL = os.getenv("DATABASE_URL")
 engine = create_engine(DATABASE_URL)
 
@@ -25,12 +25,14 @@ def root():
     return {"message": "OpenFintel API is running 🚀"}
 
 
-# 📤 UPLOAD + DATE MERGE LOGIC
+# 📤 UPLOAD + DATE MERGE
 @app.post("/api/upload")
 async def upload(file: UploadFile, doc_type: str = Form(...)):
     df = pd.read_csv(file.file)
 
+    # Normalize
     df["Date"] = pd.to_datetime(df["Date"])
+    df = df.fillna("")
 
     start_date = df["Date"].min()
     end_date = df["Date"].max()
@@ -38,7 +40,7 @@ async def upload(file: UploadFile, doc_type: str = Form(...)):
     data = df.to_dict(orient="records")
 
     with engine.begin() as conn:
-        # 🔥 DELETE overlapping data (core logic)
+        # 🔥 CORE: remove overlapping dates
         conn.execute(
             text("""
                 DELETE FROM financial_data
@@ -48,7 +50,7 @@ async def upload(file: UploadFile, doc_type: str = Form(...)):
             {"start": start_date, "end": end_date, "doc_type": doc_type}
         )
 
-        # INSERT new data
+        # Insert new rows
         for row in data:
             conn.execute(
                 text("""
@@ -59,7 +61,7 @@ async def upload(file: UploadFile, doc_type: str = Form(...)):
                     "date": row["Date"],
                     "desc": row.get("Description", ""),
                     "cat": row.get("Category", ""),
-                    "amt": row.get("Amount", 0),
+                    "amt": float(row.get("Amount", 0)),
                     "doc": doc_type
                 }
             )
@@ -78,55 +80,85 @@ async def upload(file: UploadFile, doc_type: str = Form(...)):
             }
         )
 
-    return {"message": f"{doc_type} uploaded with merge logic"}
+    return {"message": f"{doc_type} uploaded successfully with merge logic"}
 
 
-# 📊 DASHBOARD
+# 📊 DASHBOARD (FIXED)
 @app.get("/api/dashboard")
 def dashboard():
-    with engine.connect() as conn:
-        rows = conn.execute(text("SELECT * FROM financial_data")).fetchall()
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(text("""
+                SELECT date, description, category, amount
+                FROM financial_data
+            """))
+            rows = result.fetchall()
 
-    if not rows:
-        return {"error": "No data"}
+        if not rows:
+            return {"error": "No data"}
 
-    df = pd.DataFrame(rows, columns=rows[0].keys())
+        # ✅ Safe conversion
+        data = []
+        for r in rows:
+            row = dict(r._mapping)
+            if row.get("amount") is None:
+                continue
+            data.append(row)
 
-    revenue = df[df["amount"] > 0]["amount"].sum()
-    expenses = df[df["amount"] < 0]["amount"].sum()
+        df = pd.DataFrame(data)
 
-    return {
-        "revenue": float(revenue),
-        "expenses": float(abs(expenses)),
-        "net_profit": float(revenue + expenses),
-        "gross_margin": float((revenue + expenses) / revenue) if revenue else 0
-    }
+        if df.empty:
+            return {"error": "No valid data"}
+
+        # Ensure numeric
+        df["amount"] = pd.to_numeric(df["amount"], errors="coerce")
+        df = df.dropna(subset=["amount"])
+
+        revenue = df[df["amount"] > 0]["amount"].sum()
+        expenses = df[df["amount"] < 0]["amount"].sum()
+
+        return {
+            "revenue": float(revenue),
+            "expenses": float(abs(expenses)),
+            "net_profit": float(revenue + expenses),
+            "gross_margin": float((revenue + expenses) / revenue) if revenue else 0
+        }
+
+    except Exception as e:
+        return {"error": str(e)}
 
 
 # 📁 FILE LIST
 @app.get("/api/files")
-def files():
+def get_files():
     with engine.connect() as conn:
-        rows = conn.execute(text("SELECT * FROM uploaded_files ORDER BY uploaded_at DESC")).fetchall()
+        result = conn.execute(
+            text("SELECT * FROM uploaded_files ORDER BY uploaded_at DESC")
+        )
+        rows = result.fetchall()
 
-    return {"data": [dict(row._mapping) for row in rows]}
+    return {"data": [dict(r._mapping) for r in rows]}
 
 
-# 📅 COVERAGE
+# 📅 COVERAGE TRACKER
 @app.get("/api/coverage")
 def coverage():
     with engine.connect() as conn:
-        rows = conn.execute(text("SELECT DISTINCT date FROM financial_data")).fetchall()
+        result = conn.execute(text("SELECT DISTINCT date FROM financial_data"))
+        rows = result.fetchall()
 
-    dates = {r[0].strftime("%Y-%m-%d") for r in rows}
+    if not rows:
+        return {"data": []}
 
-    full_year = pd.date_range("2024-01-01", "2024-12-31")
+    existing_dates = {r[0].strftime("%Y-%m-%d") for r in rows}
 
-    result = []
-    for d in full_year:
-        result.append({
+    full_range = pd.date_range("2024-01-01", "2024-12-31")
+
+    coverage_data = []
+    for d in full_range:
+        coverage_data.append({
             "date": d.strftime("%Y-%m-%d"),
-            "exists": d.strftime("%Y-%m-%d") in dates
+            "exists": d.strftime("%Y-%m-%d") in existing_dates
         })
 
-    return {"data": result}
+    return {"data": coverage_data}
