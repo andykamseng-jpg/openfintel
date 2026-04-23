@@ -26,26 +26,48 @@ def root():
     return {"message": "OpenFintel API is running 🚀"}
 
 
-# 📤 UPLOAD (FINAL FIXED)
+# 📤 UPLOAD (FINAL FINAL)
 @app.post("/api/upload")
 async def upload(file: UploadFile, doc_type: str = Form(...)):
     try:
         df = pd.read_csv(file.file)
 
-        # ✅ Normalize fields
+        # =========================
+        # 🔥 STEP 1: DROP TRUE EMPTY ROWS
+        # =========================
+        df = df.dropna(how="all")
+
+        # =========================
+        # 🔥 STEP 2: NORMALIZE FIELDS
+        # =========================
         df["Date"] = pd.to_datetime(df.get("Date"), errors="coerce")
         df["Amount"] = pd.to_numeric(df.get("Amount"), errors="coerce")
 
-        # ✅ Normalize text
-        df["Description"] = df.get("Description", "").astype(str).str.strip().str.lower()
-        df["Category"] = df.get("Category", "").astype(str).str.strip().str.lower()
+        df["Description"] = (
+            df.get("Description", "")
+            .astype(str)
+            .str.replace(r"\s+", " ", regex=True)  # normalize spaces
+            .str.strip()
+            .str.lower()
+        )
 
-        # 🔥 FINAL STRICT CLEANING (KEY FIX)
+        df["Category"] = (
+            df.get("Category", "")
+            .astype(str)
+            .str.replace(r"\s+", " ", regex=True)
+            .str.strip()
+            .str.lower()
+        )
+
+        # =========================
+        # 🔥 STEP 3: STRICT FILTER (CRITICAL)
+        # =========================
         df = df[
-            (df["Date"].notna()) &
-            (df["Amount"].notna()) &
-            (df["Description"].str.len() > 2) &   # removes blank/garbage rows
-            (df["Amount"] != 0)                  # removes fake zero rows
+            df["Date"].notna() &
+            df["Amount"].notna() &
+            (df["Description"] != "") &
+            (df["Description"] != "nan") &
+            (df["Amount"].abs() > 0.000001)
         ]
 
         if df.empty:
@@ -56,6 +78,9 @@ async def upload(file: UploadFile, doc_type: str = Form(...)):
 
         records = df.to_dict(orient="records")
 
+        # =========================
+        # 🔥 STEP 4: UPSERT
+        # =========================
         with engine.begin() as conn:
             for row in records:
                 conn.execute(
@@ -92,7 +117,7 @@ async def upload(file: UploadFile, doc_type: str = Form(...)):
                 }
             )
 
-        return {"message": f"{doc_type} uploaded with final clean upsert"}
+        return {"message": f"{doc_type} uploaded (clean + stable)"}
 
     except Exception as e:
         return {"error": str(e)}
