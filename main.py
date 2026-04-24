@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import pandas as pd
 from sqlalchemy import create_engine, text
 import os
+import unicodedata
 
 app = FastAPI()
 
@@ -20,58 +21,64 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 engine = create_engine(DATABASE_URL)
 
 
+# 🔧 STRONG TEXT CLEANER (KEY FIX)
+def clean_text(x):
+    if pd.isna(x):
+        return ""
+    x = str(x)
+    x = unicodedata.normalize("NFKD", x)      # normalize unicode
+    x = x.encode("ascii", "ignore").decode()  # remove hidden chars
+    x = x.strip().lower()
+    x = " ".join(x.split())                   # collapse spaces
+    return x
+
+
 # 🏠 ROOT
 @app.get("/")
 def root():
     return {"message": "OpenFintel API is running 🚀"}
 
 
-# 📤 UPLOAD (FINAL CORRECT LOGIC)
+# 📤 UPLOAD (FINAL)
 @app.post("/api/upload")
 async def upload(file: UploadFile, doc_type: str = Form(...)):
     try:
         df = pd.read_csv(file.file)
 
         # =========================
-        # STEP 1: DROP EMPTY ROWS
+        # DROP EMPTY ROWS
         # =========================
         df = df.dropna(how="all")
 
         # =========================
-        # STEP 2: NORMALIZE DATA
+        # NORMALIZE DATA
         # =========================
         df["Date"] = pd.to_datetime(df.get("Date"), errors="coerce")
         df["Amount"] = pd.to_numeric(df.get("Amount"), errors="coerce")
 
-        df["Description"] = (
-            df.get("Description", "")
-            .astype(str)
-            .str.replace(r"\s+", " ", regex=True)
-            .str.strip()
-            .str.lower()
-        )
-
-        df["Category"] = (
-            df.get("Category", "")
-            .astype(str)
-            .str.replace(r"\s+", " ", regex=True)
-            .str.strip()
-            .str.lower()
-        )
+        df["Category"] = df.get("Category", "").apply(clean_text)
+        df["Description"] = df.get("Description", "").apply(clean_text)
 
         # =========================
-        # STEP 3: STRICT FILTER
+        # STRICT FILTER
         # =========================
         df = df[
             df["Date"].notna() &
             df["Amount"].notna() &
             (df["Category"] != "") &
-            (df["Category"] != "nan") &
             (df["Amount"].abs() > 0.000001)
         ]
 
         if df.empty:
             return {"error": "No valid data after cleaning"}
+
+        # =========================
+        # 🔥 CRITICAL FIX: DEDUP BEFORE INSERT
+        # =========================
+        df = df.groupby(["Date", "Category"], as_index=False).agg({
+            "Amount": "sum",
+            "Description": "first"
+        })
 
         start_date = df["Date"].min()
         end_date = df["Date"].max()
@@ -79,7 +86,7 @@ async def upload(file: UploadFile, doc_type: str = Form(...)):
         records = df.to_dict(orient="records")
 
         # =========================
-        # STEP 4: UPSERT (FIXED KEY)
+        # UPSERT
         # =========================
         with engine.begin() as conn:
             for row in records:
@@ -117,7 +124,7 @@ async def upload(file: UploadFile, doc_type: str = Form(...)):
                 }
             )
 
-        return {"message": f"{doc_type} uploaded (correct upsert key)"}
+        return {"message": f"{doc_type} uploaded (final stable logic)"}
 
     except Exception as e:
         return {"error": str(e)}
