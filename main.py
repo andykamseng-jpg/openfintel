@@ -21,60 +21,85 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 engine = create_engine(DATABASE_URL)
 
 
-# 🔧 STRONG TEXT CLEANER (KEY FIX)
+# =========================
+# 🔧 TEXT NORMALIZATION
+# =========================
 def clean_text(x):
     if pd.isna(x):
         return ""
     x = str(x)
-    x = unicodedata.normalize("NFKD", x)      # normalize unicode
-    x = x.encode("ascii", "ignore").decode()  # remove hidden chars
+    x = unicodedata.normalize("NFKD", x)
+    x = x.encode("ascii", "ignore").decode()
     x = x.strip().lower()
-    x = " ".join(x.split())                   # collapse spaces
+    x = " ".join(x.split())
     return x
 
 
+# =========================
+# 🔧 CATEGORY STANDARDIZATION (KEY FIX)
+# =========================
+CATEGORY_MAP = {
+    "delivery platform fees": "delivery sales",
+    "dine-in revenue": "dine-in sales",
+    "takeaway orders": "takeaway sales",
+}
+
+EXPECTED_CATEGORIES = {
+    "dine-in sales",
+    "takeaway sales",
+    "delivery sales",
+    "catering revenue",
+    "food cogs",
+    "beverage cogs",
+    "kitchen labor",
+    "foh labor",
+    "marketing",
+    "rent & utilities",
+    "utilities"
+}
+
+
+# =========================
 # 🏠 ROOT
+# =========================
 @app.get("/")
 def root():
-    return {"message": "OpenFintel API is running 🚀"}
+    return {"message": "OpenFintel API running 🚀"}
 
 
-# 📤 UPLOAD (FINAL)
+# =========================
+# 📤 UPLOAD
+# =========================
 @app.post("/api/upload")
 async def upload(file: UploadFile, doc_type: str = Form(...)):
     try:
         df = pd.read_csv(file.file)
 
-        # =========================
-        # DROP EMPTY ROWS
-        # =========================
+        # Drop empty rows
         df = df.dropna(how="all")
 
-        # =========================
-        # NORMALIZE DATA
-        # =========================
-        df["Date"] = pd.to_datetime(df.get("Date"), errors="coerce")
+        # Normalize columns
+        df["Date"] = pd.to_datetime(df.get("Date"), errors="coerce").dt.date
         df["Amount"] = pd.to_numeric(df.get("Amount"), errors="coerce")
 
         df["Category"] = df.get("Category", "").apply(clean_text)
         df["Description"] = df.get("Description", "").apply(clean_text)
 
-        # =========================
-        # STRICT FILTER
-        # =========================
+        # Apply category mapping
+        df["Category"] = df["Category"].apply(lambda x: CATEGORY_MAP.get(x, x))
+
+        # Filter valid rows
         df = df[
             df["Date"].notna() &
             df["Amount"].notna() &
-            (df["Category"] != "") &
+            (df["Category"].isin(EXPECTED_CATEGORIES)) &
             (df["Amount"].abs() > 0.000001)
         ]
 
         if df.empty:
-            return {"error": "No valid data after cleaning"}
+            return {"error": "No valid data"}
 
-        # =========================
-        # 🔥 CRITICAL FIX: DEDUP BEFORE INSERT
-        # =========================
+        # 🔥 CRITICAL: AGGREGATE
         df = df.groupby(["Date", "Category"], as_index=False).agg({
             "Amount": "sum",
             "Description": "first"
@@ -85,9 +110,7 @@ async def upload(file: UploadFile, doc_type: str = Form(...)):
 
         records = df.to_dict(orient="records")
 
-        # =========================
         # UPSERT
-        # =========================
         with engine.begin() as conn:
             for row in records:
                 conn.execute(
@@ -109,7 +132,7 @@ async def upload(file: UploadFile, doc_type: str = Form(...)):
                     }
                 )
 
-            # track uploads
+            # Track uploads
             conn.execute(
                 text("""
                     INSERT INTO uploaded_files
@@ -124,13 +147,15 @@ async def upload(file: UploadFile, doc_type: str = Form(...)):
                 }
             )
 
-        return {"message": f"{doc_type} uploaded (final stable logic)"}
+        return {"message": f"{doc_type} uploaded (stable schema applied)"}
 
     except Exception as e:
         return {"error": str(e)}
 
 
+# =========================
 # 📊 DASHBOARD
+# =========================
 @app.get("/api/dashboard")
 def dashboard():
     try:
@@ -157,7 +182,9 @@ def dashboard():
         return {"error": str(e)}
 
 
+# =========================
 # 📁 FILE LIST
+# =========================
 @app.get("/api/files")
 def get_files():
     try:
@@ -173,7 +200,9 @@ def get_files():
         return {"error": str(e)}
 
 
+# =========================
 # 📅 COVERAGE
+# =========================
 @app.get("/api/coverage")
 def coverage():
     try:
