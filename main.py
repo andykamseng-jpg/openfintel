@@ -7,7 +7,9 @@ import unicodedata
 
 app = FastAPI()
 
+# =========================
 # ✅ CORS
+# =========================
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -16,13 +18,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ✅ DB
+# =========================
+# ✅ DATABASE
+# =========================
 DATABASE_URL = os.getenv("DATABASE_URL")
 engine = create_engine(DATABASE_URL)
 
 
 # =========================
-# 🔧 TEXT NORMALIZATION
+# 🔧 CLEAN TEXT (CRITICAL)
 # =========================
 def clean_text(x):
     if pd.isna(x):
@@ -36,30 +40,6 @@ def clean_text(x):
 
 
 # =========================
-# 🔧 CATEGORY STANDARDIZATION (KEY FIX)
-# =========================
-CATEGORY_MAP = {
-    "delivery platform fees": "delivery sales",
-    "dine-in revenue": "dine-in sales",
-    "takeaway orders": "takeaway sales",
-}
-
-EXPECTED_CATEGORIES = {
-    "dine-in sales",
-    "takeaway sales",
-    "delivery sales",
-    "catering revenue",
-    "food cogs",
-    "beverage cogs",
-    "kitchen labor",
-    "foh labor",
-    "marketing",
-    "rent & utilities",
-    "utilities"
-}
-
-
-# =========================
 # 🏠 ROOT
 # =========================
 @app.get("/")
@@ -68,38 +48,45 @@ def root():
 
 
 # =========================
-# 📤 UPLOAD
+# 📤 UPLOAD (FINAL CLEAN)
 # =========================
 @app.post("/api/upload")
 async def upload(file: UploadFile, doc_type: str = Form(...)):
     try:
         df = pd.read_csv(file.file)
 
-        # Drop empty rows
+        # -------------------------
+        # 🔥 FIX 1: HANDLE ",,," ROWS
+        # -------------------------
+        df = df.replace(r'^\s*$', None, regex=True)
         df = df.dropna(how="all")
 
-        # Normalize columns
+        # -------------------------
+        # 🔥 FIX 2: NORMALIZE
+        # -------------------------
         df["Date"] = pd.to_datetime(df.get("Date"), errors="coerce").dt.date
         df["Amount"] = pd.to_numeric(df.get("Amount"), errors="coerce")
 
         df["Category"] = df.get("Category", "").apply(clean_text)
         df["Description"] = df.get("Description", "").apply(clean_text)
 
-        # Apply category mapping
-        df["Category"] = df["Category"].apply(lambda x: CATEGORY_MAP.get(x, x))
-
-        # Filter valid rows
+        # -------------------------
+        # 🔥 FIX 3: REMOVE INVALID ROWS ONLY
+        # (NO DATA LOSS)
+        # -------------------------
         df = df[
             df["Date"].notna() &
             df["Amount"].notna() &
-            (df["Category"].isin(EXPECTED_CATEGORIES)) &
+            (df["Category"] != "") &
             (df["Amount"].abs() > 0.000001)
         ]
 
         if df.empty:
-            return {"error": "No valid data"}
+            return {"error": "No valid data after cleaning"}
 
-        # 🔥 CRITICAL: AGGREGATE
+        # -------------------------
+        # 🔥 FIX 4: AGGREGATE (PREVENT DUPLICATES)
+        # -------------------------
         df = df.groupby(["Date", "Category"], as_index=False).agg({
             "Amount": "sum",
             "Description": "first"
@@ -110,7 +97,9 @@ async def upload(file: UploadFile, doc_type: str = Form(...)):
 
         records = df.to_dict(orient="records")
 
-        # UPSERT
+        # -------------------------
+        # 🔥 FIX 5: UPSERT (IDEMPOTENT)
+        # -------------------------
         with engine.begin() as conn:
             for row in records:
                 conn.execute(
@@ -132,7 +121,7 @@ async def upload(file: UploadFile, doc_type: str = Form(...)):
                     }
                 )
 
-            # Track uploads
+            # Track uploads (no effect on data)
             conn.execute(
                 text("""
                     INSERT INTO uploaded_files
@@ -147,7 +136,7 @@ async def upload(file: UploadFile, doc_type: str = Form(...)):
                 }
             )
 
-        return {"message": f"{doc_type} uploaded (stable schema applied)"}
+        return {"message": f"{doc_type} uploaded (clean + no data loss)"}
 
     except Exception as e:
         return {"error": str(e)}
@@ -183,10 +172,10 @@ def dashboard():
 
 
 # =========================
-# 📁 FILE LIST
+# 📁 FILES
 # =========================
 @app.get("/api/files")
-def get_files():
+def files():
     try:
         with engine.connect() as conn:
             result = conn.execute(
