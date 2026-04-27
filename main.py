@@ -30,6 +30,14 @@ def clean_text(x):
     return x
 
 # -------------------------
+# SAFE COLUMN ACCESS
+# -------------------------
+def safe_col(df, col):
+    if col in df.columns:
+        return df[col]
+    return pd.Series([""] * len(df))
+
+# -------------------------
 # HASH (DEDUP)
 # -------------------------
 def generate_hash(df):
@@ -48,26 +56,29 @@ def normalize(df, doc_type):
     df.columns = df.columns.str.strip()
 
     if doc_type == "income_statement":
-        df["Amount"] = pd.to_numeric(df["Amount"], errors="coerce")
+        df["Amount"] = pd.to_numeric(safe_col(df, "Amount"), errors="coerce")
+        df["Category"] = safe_col(df, "Category").apply(clean_text)
 
     elif doc_type == "general_ledger":
-        df["Debit"] = pd.to_numeric(df.get("Debit", 0), errors="coerce").fillna(0)
-        df["Credit"] = pd.to_numeric(df.get("Credit", 0), errors="coerce").fillna(0)
-        df["Amount"] = df["Debit"] - df["Credit"]
-        df["Category"] = df.get("Account", "").apply(clean_text)
+        debit = pd.to_numeric(safe_col(df, "Debit"), errors="coerce").fillna(0)
+        credit = pd.to_numeric(safe_col(df, "Credit"), errors="coerce").fillna(0)
+        df["Amount"] = debit - credit
+        df["Category"] = safe_col(df, "Account").apply(clean_text)
 
     elif doc_type == "balance_sheet":
-        df["Amount"] = pd.to_numeric(df.get("Value", 0), errors="coerce")
-        df["Category"] = df.get("Asset", "").apply(clean_text)
+        df["Amount"] = pd.to_numeric(safe_col(df, "Value"), errors="coerce")
+        df["Category"] = safe_col(df, "Asset").apply(clean_text)
 
     elif doc_type == "cash_flow":
-        df["Amount"] = pd.to_numeric(df["Amount"], errors="coerce")
+        df["Amount"] = pd.to_numeric(safe_col(df, "Amount"), errors="coerce")
+        df["Category"] = safe_col(df, "Category").apply(clean_text)
 
     elif doc_type == "expense_breakdown":
-        df["Amount"] = pd.to_numeric(df["Amount"], errors="coerce")
+        df["Amount"] = pd.to_numeric(safe_col(df, "Amount"), errors="coerce")
+        df["Category"] = safe_col(df, "Category").apply(clean_text)
 
     else:
-        raise ValueError("Unsupported doc_type")
+        raise ValueError(f"Unsupported doc_type: {doc_type}")
 
     return df
 
@@ -77,78 +88,84 @@ def normalize(df, doc_type):
 @app.post("/api/upload")
 async def upload(file: UploadFile, doc_type: str = Form(...)):
 
-    df = pd.read_csv(file.file)
+    try:
+        df = pd.read_csv(file.file)
 
-    # Clean empty rows
-    df = df.replace(r'^\s*$', None, regex=True)
-    df = df.dropna(how="all")
-    df = df.loc[~df.apply(lambda r: r.astype(str).str.strip().eq("").all(), axis=1)]
+        # Clean columns
+        df.columns = df.columns.str.strip()
 
-    # Normalize date
-    df["Date"] = pd.to_datetime(df.get("Date"), errors="coerce").dt.date
+        # Remove empty rows
+        df = df.replace(r'^\s*$', None, regex=True)
+        df = df.dropna(how="all")
+        df = df.loc[~df.apply(lambda r: r.astype(str).str.strip().eq("").all(), axis=1)]
 
-    # Clean text fields safely
-    if "Category" in df.columns:
-        df["Category"] = df["Category"].apply(clean_text)
-    if "Description" in df.columns:
-        df["Description"] = df["Description"].apply(clean_text)
-    else:
-        df["Description"] = ""
+        # Normalize date
+        df["Date"] = pd.to_datetime(df.get("Date"), errors="coerce").dt.date
 
-    # Apply report-specific logic
-    df = normalize(df, doc_type)
+        # Ensure description exists
+        if "Description" in df.columns:
+            df["Description"] = df["Description"].apply(clean_text)
+        else:
+            df["Description"] = ""
 
-    # Validation
-    df = df[
-        df["Date"].notna() &
-        df["Amount"].notna() &
-        (df["Category"] != "") &
-        (df["Amount"].abs() > 0.000001)
-    ]
+        # Normalize based on report
+        df = normalize(df, doc_type)
 
-    rows_uploaded = len(df)
+        # Validate rows
+        df = df[
+            df["Date"].notna() &
+            df["Amount"].notna() &
+            (df["Category"] != "") &
+            (df["Amount"].abs() > 0.000001)
+        ]
 
-    # Fingerprint
-    df["fingerprint"] = generate_hash(df)
+        rows_uploaded = len(df)
 
-    records = df.to_dict(orient="records")
+        # Generate fingerprint
+        df["fingerprint"] = generate_hash(df)
 
-    with engine.begin() as conn:
+        records = df.to_dict(orient="records")
 
-        result = conn.execute(text("""
-            INSERT INTO financial_data
-            (date, description, category, amount, doc_type, fingerprint)
-            VALUES (:Date, :Description, :Category, :Amount, :doc_type, :fingerprint)
-            ON CONFLICT (fingerprint) DO NOTHING
-            RETURNING 1
-        """), [
-            {
-                "Date": r["Date"],
-                "Description": r["Description"],
-                "Category": r["Category"],
-                "Amount": float(r["Amount"]),
-                "doc_type": doc_type,
-                "fingerprint": r["fingerprint"]
-            }
-            for r in records
-        ])
+        with engine.begin() as conn:
 
-        inserted = len(result.fetchall())
+            result = conn.execute(text("""
+                INSERT INTO financial_data
+                (date, description, category, amount, doc_type, fingerprint)
+                VALUES (:Date, :Description, :Category, :Amount, :doc_type, :fingerprint)
+                ON CONFLICT (fingerprint) DO NOTHING
+                RETURNING 1
+            """), [
+                {
+                    "Date": r["Date"],
+                    "Description": r["Description"],
+                    "Category": r["Category"],
+                    "Amount": float(r["Amount"]),
+                    "doc_type": doc_type,
+                    "fingerprint": r["fingerprint"]
+                }
+                for r in records
+            ])
 
-        conn.execute(text("""
-            INSERT INTO upload_logs (filename, doc_type, rows_uploaded, rows_inserted)
-            VALUES (:f, :d, :u, :i)
-        """), {
-            "f": file.filename,
-            "d": doc_type,
-            "u": rows_uploaded,
-            "i": inserted
-        })
+            inserted = len(result.fetchall())
 
-    return {
-        "uploaded": rows_uploaded,
-        "inserted": inserted
-    }
+            # Audit log
+            conn.execute(text("""
+                INSERT INTO upload_logs (filename, doc_type, rows_uploaded, rows_inserted)
+                VALUES (:f, :d, :u, :i)
+            """), {
+                "f": file.filename,
+                "d": doc_type,
+                "u": rows_uploaded,
+                "i": inserted
+            })
+
+        return {
+            "uploaded": rows_uploaded,
+            "inserted": inserted
+        }
+
+    except Exception as e:
+        return {"error": str(e)}
 
 # -------------------------
 # SUMMARY (Income Statement)
@@ -159,8 +176,8 @@ def summary():
     with engine.begin() as conn:
         result = conn.execute(text("""
             SELECT
-                SUM(CASE WHEN category = 'revenue' THEN amount ELSE 0 END) AS revenue,
-                SUM(CASE WHEN category = 'expenses' THEN amount ELSE 0 END) AS expenses
+                SUM(CASE WHEN category = 'revenue' THEN amount ELSE 0 END),
+                SUM(CASE WHEN category = 'expenses' THEN amount ELSE 0 END)
             FROM financial_data
             WHERE doc_type = 'income_statement'
         """)).fetchone()
@@ -176,7 +193,7 @@ def summary():
     }
 
 # -------------------------
-# CASH FLOW API
+# CASH FLOW
 # -------------------------
 @app.get("/api/cashflow")
 def cashflow():
@@ -191,7 +208,7 @@ def cashflow():
     return {"cash_flow": float(total or 0)}
 
 # -------------------------
-# BALANCE SHEET SNAPSHOT
+# BALANCE SHEET
 # -------------------------
 @app.get("/api/balance-sheet")
 def balance_sheet():
@@ -215,13 +232,13 @@ def monthly():
     with engine.begin() as conn:
         rows = conn.execute(text("""
             SELECT
-                DATE_TRUNC('month', date) as month,
-                SUM(CASE WHEN category = 'revenue' THEN amount ELSE 0 END) AS revenue,
-                SUM(CASE WHEN category = 'expenses' THEN amount ELSE 0 END) AS expenses
+                DATE_TRUNC('month', date),
+                SUM(CASE WHEN category = 'revenue' THEN amount ELSE 0 END),
+                SUM(CASE WHEN category = 'expenses' THEN amount ELSE 0 END)
             FROM financial_data
             WHERE doc_type = 'income_statement'
-            GROUP BY month
-            ORDER BY month
+            GROUP BY 1
+            ORDER BY 1
         """)).fetchall()
 
     return [
