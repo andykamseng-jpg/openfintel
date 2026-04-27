@@ -2,14 +2,10 @@ from fastapi import FastAPI, UploadFile, Form
 from fastapi.middleware.cors import CORSMiddleware
 import pandas as pd
 from sqlalchemy import create_engine, text
-import os
-import unicodedata
+import os, unicodedata, hashlib
 
 app = FastAPI()
 
-# =========================
-# ✅ CORS
-# =========================
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -18,16 +14,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# =========================
-# ✅ DATABASE
-# =========================
-DATABASE_URL = os.getenv("DATABASE_URL")
-engine = create_engine(DATABASE_URL)
+engine = create_engine(os.getenv("DATABASE_URL"))
 
-
-# =========================
-# 🔧 CLEAN TEXT (CRITICAL)
-# =========================
+# -------------------------
+# CLEAN TEXT
+# -------------------------
 def clean_text(x):
     if pd.isna(x):
         return ""
@@ -38,182 +29,207 @@ def clean_text(x):
     x = " ".join(x.split())
     return x
 
+# -------------------------
+# HASH (DEDUP)
+# -------------------------
+def generate_hash(df):
+    return (
+        df["Date"].astype(str) + "|" +
+        df["Category"] + "|" +
+        df["Amount"].round(2).astype(str) + "|" +
+        df["Description"]
+    ).apply(lambda x: hashlib.sha256(x.encode()).hexdigest())
 
-# =========================
-# 🏠 ROOT
-# =========================
-@app.get("/")
-def root():
-    return {"message": "OpenFintel API running 🚀"}
+# -------------------------
+# NORMALIZE PER REPORT TYPE
+# -------------------------
+def normalize(df, doc_type):
 
+    df.columns = df.columns.str.strip()
 
-# =========================
-# 📤 UPLOAD (FINAL CLEAN)
-# =========================
+    if doc_type == "income_statement":
+        df["Amount"] = pd.to_numeric(df["Amount"], errors="coerce")
+
+    elif doc_type == "general_ledger":
+        df["Debit"] = pd.to_numeric(df.get("Debit", 0), errors="coerce").fillna(0)
+        df["Credit"] = pd.to_numeric(df.get("Credit", 0), errors="coerce").fillna(0)
+        df["Amount"] = df["Debit"] - df["Credit"]
+        df["Category"] = df.get("Account", "").apply(clean_text)
+
+    elif doc_type == "balance_sheet":
+        df["Amount"] = pd.to_numeric(df.get("Value", 0), errors="coerce")
+        df["Category"] = df.get("Asset", "").apply(clean_text)
+
+    elif doc_type == "cash_flow":
+        df["Amount"] = pd.to_numeric(df["Amount"], errors="coerce")
+
+    elif doc_type == "expense_breakdown":
+        df["Amount"] = pd.to_numeric(df["Amount"], errors="coerce")
+
+    else:
+        raise ValueError("Unsupported doc_type")
+
+    return df
+
+# -------------------------
+# UPLOAD ENDPOINT
+# -------------------------
 @app.post("/api/upload")
 async def upload(file: UploadFile, doc_type: str = Form(...)):
-    try:
-        df = pd.read_csv(file.file)
 
-        # -------------------------
-        # 🔥 FIX 1: HANDLE ",,," ROWS
-        # -------------------------
-        df = df.replace(r'^\s*$', None, regex=True)
-        df = df.dropna(how="all")
+    df = pd.read_csv(file.file)
 
-        # -------------------------
-        # 🔥 FIX 2: NORMALIZE
-        # -------------------------
-        df["Date"] = pd.to_datetime(df.get("Date"), errors="coerce").dt.date
-        df["Amount"] = pd.to_numeric(df.get("Amount"), errors="coerce")
+    # Clean empty rows
+    df = df.replace(r'^\s*$', None, regex=True)
+    df = df.dropna(how="all")
+    df = df.loc[~df.apply(lambda r: r.astype(str).str.strip().eq("").all(), axis=1)]
 
-        df["Category"] = df.get("Category", "").apply(clean_text)
-        df["Description"] = df.get("Description", "").apply(clean_text)
+    # Normalize date
+    df["Date"] = pd.to_datetime(df.get("Date"), errors="coerce").dt.date
 
-        # -------------------------
-        # 🔥 FIX 3: REMOVE INVALID ROWS ONLY
-        # (NO DATA LOSS)
-        # -------------------------
-        df = df[
-            df["Date"].notna() &
-            df["Amount"].notna() &
-            (df["Category"] != "") &
-            (df["Amount"].abs() > 0.000001)
-        ]
+    # Clean text fields safely
+    if "Category" in df.columns:
+        df["Category"] = df["Category"].apply(clean_text)
+    if "Description" in df.columns:
+        df["Description"] = df["Description"].apply(clean_text)
+    else:
+        df["Description"] = ""
 
-        if df.empty:
-            return {"error": "No valid data after cleaning"}
+    # Apply report-specific logic
+    df = normalize(df, doc_type)
 
-        # -------------------------
-        # 🔥 FIX 4: AGGREGATE (PREVENT DUPLICATES)
-        # -------------------------
-        df = df.groupby(["Date", "Category"], as_index=False).agg({
-            "Amount": "sum",
-            "Description": "first"
+    # Validation
+    df = df[
+        df["Date"].notna() &
+        df["Amount"].notna() &
+        (df["Category"] != "") &
+        (df["Amount"].abs() > 0.000001)
+    ]
+
+    rows_uploaded = len(df)
+
+    # Fingerprint
+    df["fingerprint"] = generate_hash(df)
+
+    records = df.to_dict(orient="records")
+
+    with engine.begin() as conn:
+
+        result = conn.execute(text("""
+            INSERT INTO financial_data
+            (date, description, category, amount, doc_type, fingerprint)
+            VALUES (:Date, :Description, :Category, :Amount, :doc_type, :fingerprint)
+            ON CONFLICT (fingerprint) DO NOTHING
+            RETURNING 1
+        """), [
+            {
+                "Date": r["Date"],
+                "Description": r["Description"],
+                "Category": r["Category"],
+                "Amount": float(r["Amount"]),
+                "doc_type": doc_type,
+                "fingerprint": r["fingerprint"]
+            }
+            for r in records
+        ])
+
+        inserted = len(result.fetchall())
+
+        conn.execute(text("""
+            INSERT INTO upload_logs (filename, doc_type, rows_uploaded, rows_inserted)
+            VALUES (:f, :d, :u, :i)
+        """), {
+            "f": file.filename,
+            "d": doc_type,
+            "u": rows_uploaded,
+            "i": inserted
         })
 
-        start_date = df["Date"].min()
-        end_date = df["Date"].max()
+    return {
+        "uploaded": rows_uploaded,
+        "inserted": inserted
+    }
 
-        records = df.to_dict(orient="records")
+# -------------------------
+# SUMMARY (Income Statement)
+# -------------------------
+@app.get("/api/summary")
+def summary():
 
-        # -------------------------
-        # 🔥 FIX 5: UPSERT (IDEMPOTENT)
-        # -------------------------
-        with engine.begin() as conn:
-            for row in records:
-                conn.execute(
-                    text("""
-                        INSERT INTO financial_data
-                        (date, description, category, amount, doc_type)
-                        VALUES (:date, :desc, :cat, :amt, :doc)
-                        ON CONFLICT (date, category, doc_type)
-                        DO UPDATE SET
-                            description = EXCLUDED.description,
-                            amount = EXCLUDED.amount
-                    """),
-                    {
-                        "date": row["Date"],
-                        "desc": row["Description"],
-                        "cat": row["Category"],
-                        "amt": float(row["Amount"]),
-                        "doc": doc_type
-                    }
-                )
+    with engine.begin() as conn:
+        result = conn.execute(text("""
+            SELECT
+                SUM(CASE WHEN category = 'revenue' THEN amount ELSE 0 END) AS revenue,
+                SUM(CASE WHEN category = 'expenses' THEN amount ELSE 0 END) AS expenses
+            FROM financial_data
+            WHERE doc_type = 'income_statement'
+        """)).fetchone()
 
-            # Track uploads (no effect on data)
-            conn.execute(
-                text("""
-                    INSERT INTO uploaded_files
-                    (file_name, doc_type, start_date, end_date)
-                    VALUES (:name, :doc, :start, :end)
-                """),
-                {
-                    "name": file.filename,
-                    "doc": doc_type,
-                    "start": start_date,
-                    "end": end_date
-                }
-            )
+    revenue = float(result[0] or 0)
+    expenses = float(result[1] or 0)
 
-        return {"message": f"{doc_type} uploaded (clean + no data loss)"}
+    return {
+        "revenue": revenue,
+        "expenses": expenses,
+        "net_profit": revenue - expenses,
+        "gross_margin": ((revenue - expenses) / revenue) if revenue else 0
+    }
 
-    except Exception as e:
-        return {"error": str(e)}
+# -------------------------
+# CASH FLOW API
+# -------------------------
+@app.get("/api/cashflow")
+def cashflow():
 
+    with engine.begin() as conn:
+        total = conn.execute(text("""
+            SELECT SUM(amount)
+            FROM financial_data
+            WHERE doc_type = 'cash_flow'
+        """)).scalar()
 
-# =========================
-# 📊 DASHBOARD
-# =========================
-@app.get("/api/dashboard")
-def dashboard():
-    try:
-        with engine.connect() as conn:
-            result = conn.execute(text("SELECT amount FROM financial_data"))
-            rows = result.fetchall()
+    return {"cash_flow": float(total or 0)}
 
-        if not rows:
-            return {"error": "No data"}
+# -------------------------
+# BALANCE SHEET SNAPSHOT
+# -------------------------
+@app.get("/api/balance-sheet")
+def balance_sheet():
 
-        amounts = [r[0] for r in rows if r[0] is not None]
+    with engine.begin() as conn:
+        rows = conn.execute(text("""
+            SELECT category, SUM(amount)
+            FROM financial_data
+            WHERE doc_type = 'balance_sheet'
+            GROUP BY category
+        """)).fetchall()
 
-        revenue = sum(a for a in amounts if a > 0)
-        expenses = sum(a for a in amounts if a < 0)
+    return {r[0]: float(r[1]) for r in rows}
 
-        return {
-            "revenue": float(revenue),
-            "expenses": float(abs(expenses)),
-            "net_profit": float(revenue + expenses),
-            "gross_margin": float((revenue + expenses) / revenue) if revenue else 0
+# -------------------------
+# MONTHLY ANALYTICS
+# -------------------------
+@app.get("/api/monthly")
+def monthly():
+
+    with engine.begin() as conn:
+        rows = conn.execute(text("""
+            SELECT
+                DATE_TRUNC('month', date) as month,
+                SUM(CASE WHEN category = 'revenue' THEN amount ELSE 0 END) AS revenue,
+                SUM(CASE WHEN category = 'expenses' THEN amount ELSE 0 END) AS expenses
+            FROM financial_data
+            WHERE doc_type = 'income_statement'
+            GROUP BY month
+            ORDER BY month
+        """)).fetchall()
+
+    return [
+        {
+            "month": str(r[0]),
+            "revenue": float(r[1]),
+            "expenses": float(r[2]),
+            "profit": float(r[1] - r[2])
         }
-
-    except Exception as e:
-        return {"error": str(e)}
-
-
-# =========================
-# 📁 FILES
-# =========================
-@app.get("/api/files")
-def files():
-    try:
-        with engine.connect() as conn:
-            result = conn.execute(
-                text("SELECT * FROM uploaded_files ORDER BY uploaded_at DESC")
-            )
-            rows = result.fetchall()
-
-        return {"data": [dict(r._mapping) for r in rows]}
-
-    except Exception as e:
-        return {"error": str(e)}
-
-
-# =========================
-# 📅 COVERAGE
-# =========================
-@app.get("/api/coverage")
-def coverage():
-    try:
-        with engine.connect() as conn:
-            result = conn.execute(text("SELECT DISTINCT date FROM financial_data"))
-            rows = result.fetchall()
-
-        if not rows:
-            return {"data": []}
-
-        existing = {r[0].strftime("%Y-%m-%d") for r in rows}
-        full = pd.date_range("2024-01-01", "2024-12-31")
-
-        return {
-            "data": [
-                {
-                    "date": d.strftime("%Y-%m-%d"),
-                    "exists": d.strftime("%Y-%m-%d") in existing
-                }
-                for d in full
-            ]
-        }
-
-    except Exception as e:
-        return {"error": str(e)}
+        for r in rows
+    ]
