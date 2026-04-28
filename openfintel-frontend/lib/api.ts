@@ -1,12 +1,9 @@
-// lib/api.ts
-
 const BASE_URL = "https://openfintel.onrender.com";
 
-// Generic fetch helper (better for debugging)
 async function fetchAPI(endpoint: string) {
   try {
     const res = await fetch(`${BASE_URL}${endpoint}`, {
-      cache: "no-store", // ensures fresh data
+      cache: "no-store",
     });
 
     if (!res.ok) {
@@ -20,18 +17,14 @@ async function fetchAPI(endpoint: string) {
   }
 }
 
-// Dashboard
 export async function getDashboard() {
   return fetchAPI("/api/dashboard");
 }
 
-// Uploaded files
 export async function getFiles() {
   return fetchAPI("/api/files");
 }
 
-// Coverage tracker
 export async function getCoverage() {
   return fetchAPI("/api/coverage");
-}
 }
