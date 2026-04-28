@@ -14,7 +14,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ✅ ONLY change: keep connection alive
+# ✅ stable connection (fix SSL drop)
 engine = create_engine(
     os.getenv("DATABASE_URL"),
     pool_pre_ping=True
@@ -42,7 +42,7 @@ def safe_col(df, col):
     return pd.Series([""] * len(df))
 
 # -------------------------
-# HASH
+# HASH (DEDUP)
 # -------------------------
 def generate_hash(df):
     return (
@@ -53,7 +53,7 @@ def generate_hash(df):
     ).apply(lambda x: hashlib.sha256(x.encode()).hexdigest())
 
 # -------------------------
-# NORMALIZE
+# NORMALIZE PER REPORT
 # -------------------------
 def normalize(df, doc_type):
 
@@ -87,14 +87,14 @@ def normalize(df, doc_type):
     return df
 
 # -------------------------
-# SMALL SAFE BATCH (only fix for SSL issue)
+# BATCH HELPER (fix SSL)
 # -------------------------
 def chunked(data, size=50):
     for i in range(0, len(data), size):
         yield data[i:i + size]
 
 # -------------------------
-# UPLOAD
+# UPLOAD API
 # -------------------------
 @app.post("/api/upload")
 async def upload(file: UploadFile, doc_type: str = Form(...)):
@@ -104,19 +104,24 @@ async def upload(file: UploadFile, doc_type: str = Form(...)):
 
         df.columns = df.columns.str.strip()
 
+        # clean empty rows
         df = df.replace(r'^\s*$', None, regex=True)
         df = df.dropna(how="all")
         df = df.loc[~df.apply(lambda r: r.astype(str).str.strip().eq("").all(), axis=1)]
 
+        # date
         df["Date"] = pd.to_datetime(df.get("Date"), errors="coerce").dt.date
 
+        # description
         if "Description" in df.columns:
             df["Description"] = df["Description"].apply(clean_text)
         else:
             df["Description"] = ""
 
+        # normalize
         df = normalize(df, doc_type)
 
+        # validate
         df = df[
             df["Date"].notna() &
             df["Amount"].notna() &
@@ -126,6 +131,7 @@ async def upload(file: UploadFile, doc_type: str = Form(...)):
 
         rows_uploaded = len(df)
 
+        # fingerprint
         df["fingerprint"] = generate_hash(df)
         records = df.to_dict(orient="records")
 
@@ -133,7 +139,7 @@ async def upload(file: UploadFile, doc_type: str = Form(...)):
 
         with engine.begin() as conn:
 
-            # ✅ ONLY CHANGE: batch insert to avoid SSL drop
+            # ✅ stable batch insert
             for batch in chunked(records, 50):
 
                 result = conn.execute(text("""
@@ -141,7 +147,6 @@ async def upload(file: UploadFile, doc_type: str = Form(...)):
                     (date, description, category, amount, doc_type, fingerprint)
                     VALUES (:Date, :Description, :Category, :Amount, :doc_type, :fingerprint)
                     ON CONFLICT (fingerprint) DO NOTHING
-                    RETURNING 1
                 """), [
                     {
                         "Date": r["Date"],
@@ -154,8 +159,11 @@ async def upload(file: UploadFile, doc_type: str = Form(...)):
                     for r in batch
                 ])
 
-                inserted += len(result.fetchall())
+                # ✅ correct count (no RETURNING bug)
+                if result.rowcount:
+                    inserted += result.rowcount
 
+            # audit log
             conn.execute(text("""
                 INSERT INTO upload_logs (filename, doc_type, rows_uploaded, rows_inserted)
                 VALUES (:f, :d, :u, :i)
@@ -172,7 +180,7 @@ async def upload(file: UploadFile, doc_type: str = Form(...)):
         return {"error": str(e)}
 
 # -------------------------
-# DASHBOARD
+# DASHBOARD API
 # -------------------------
 @app.get("/api/dashboard")
 def dashboard():
