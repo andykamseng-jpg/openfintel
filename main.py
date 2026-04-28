@@ -14,10 +14,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-engine = create_engine(
-    os.getenv("DATABASE_URL"),
-    pool_pre_ping=True
-)
+engine = create_engine(os.getenv("DATABASE_URL"))
 
 # -------------------------
 # CLEAN TEXT
@@ -33,189 +30,164 @@ def clean_text(x):
     return x
 
 # -------------------------
-# SAFE COLUMN
-# -------------------------
-def safe_col(df, col):
-    return df[col] if col in df.columns else pd.Series([""] * len(df))
-
-# -------------------------
 # HASH (DEDUP)
 # -------------------------
-def generate_hash(df):
-    return (
-        df["Date"].astype(str) + "|" +
-        df["Category"] + "|" +
-        df["Amount"].round(2).astype(str) + "|" +
-        df["Description"]
-    ).apply(lambda x: hashlib.sha256(x.encode()).hexdigest())
+def generate_hash(row):
+    raw = "|".join([
+        str(row["Date"]),
+        row["Category"],
+        f"{round(row['Amount'], 2)}",
+        row["Description"]
+    ])
+    return hashlib.sha256(raw.encode()).hexdigest()
 
 # -------------------------
-# NORMALIZE PER REPORT
-# -------------------------
-def normalize(df, doc_type):
-
-    if doc_type == "income_statement":
-        df["Amount"] = pd.to_numeric(safe_col(df, "Amount"), errors="coerce")
-        df["Category"] = safe_col(df, "Category").apply(clean_text)
-
-    elif doc_type == "general_ledger":
-        debit = pd.to_numeric(safe_col(df, "Debit"), errors="coerce").fillna(0)
-        credit = pd.to_numeric(safe_col(df, "Credit"), errors="coerce").fillna(0)
-        df["Amount"] = debit - credit
-        df["Category"] = safe_col(df, "Account").apply(clean_text)
-
-    elif doc_type == "balance_sheet":
-        df["Amount"] = pd.to_numeric(safe_col(df, "Value"), errors="coerce")
-        df["Category"] = safe_col(df, "Asset").apply(clean_text)
-
-    elif doc_type == "cash_flow":
-        df["Amount"] = pd.to_numeric(safe_col(df, "Amount"), errors="coerce")
-        df["Category"] = safe_col(df, "Category").apply(clean_text)
-
-    elif doc_type == "expense_breakdown":
-        df["Amount"] = pd.to_numeric(safe_col(df, "Amount"), errors="coerce")
-        df["Category"] = safe_col(df, "Category").apply(clean_text)
-
-    else:
-        raise ValueError(f"Unsupported doc_type: {doc_type}")
-
-    return df
-
-# -------------------------
-# CHUNKING (fix SSL issues)
-# -------------------------
-def chunked(data, size=50):
-    for i in range(0, len(data), size):
-        yield data[i:i + size]
-
-# -------------------------
-# UPLOAD API
+# UPLOAD
 # -------------------------
 @app.post("/api/upload")
 async def upload(file: UploadFile, doc_type: str = Form(...)):
-    try:
-        df = pd.read_csv(file.file)
-        df.columns = df.columns.str.strip()
+    df = pd.read_csv(file.file)
 
-        # remove fake empty rows
-        df = df.replace(r'^\s*$', None, regex=True)
-        df = df.dropna(how="all")
-        df = df.loc[~df.apply(lambda r: r.astype(str).str.strip().eq("").all(), axis=1)]
+    df = df.replace(r'^\s*$', None, regex=True)
+    df = df.dropna(how="all")
 
-        # parse date
-        df["Date"] = pd.to_datetime(df.get("Date"), errors="coerce").dt.date
+    df["Date"] = pd.to_datetime(df["Date"], errors="coerce").dt.date
+    df["Amount"] = pd.to_numeric(df["Amount"], errors="coerce")
 
-        # description
-        if "Description" in df.columns:
-            df["Description"] = df["Description"].apply(clean_text)
-        else:
-            df["Description"] = ""
+    df["Category"] = df["Category"].apply(clean_text)
+    df["Description"] = df["Description"].apply(clean_text)
 
-        # normalize
-        df = normalize(df, doc_type)
+    df = df[
+        df["Date"].notna() &
+        df["Amount"].notna() &
+        (df["Category"] != "")
+    ]
 
-        # validate
-        df = df[
-            df["Date"].notna() &
-            df["Amount"].notna() &
-            (df["Category"] != "") &
-            (df["Amount"].abs() > 0.000001)
-        ]
+    rows_uploaded = len(df)
 
-        rows_uploaded = len(df)
+    df["fingerprint"] = df.apply(generate_hash, axis=1)
 
-        # dedup fingerprint
-        df["fingerprint"] = generate_hash(df)
-        records = df.to_dict(orient="records")
-
-        inserted = 0
-
-        with engine.begin() as conn:
-            for batch in chunked(records, 50):
-
-                result = conn.execute(text("""
-                    INSERT INTO financial_data
-                    (date, description, category, amount, doc_type, fingerprint)
-                    VALUES (:Date, :Description, :Category, :Amount, :doc_type, :fingerprint)
-                    ON CONFLICT (fingerprint) DO NOTHING
-                """), [
-                    {
-                        "Date": r["Date"],
-                        "Description": r["Description"],
-                        "Category": r["Category"],
-                        "Amount": float(r["Amount"]),
-                        "doc_type": doc_type,
-                        "fingerprint": r["fingerprint"]
-                    }
-                    for r in batch
-                ])
-
-                if result.rowcount:
-                    inserted += result.rowcount
-
-        return {
-            "uploaded": rows_uploaded,
-            "inserted": inserted
-        }
-
-    except Exception as e:
-        return {"error": str(e)}
-
-# -------------------------
-# DASHBOARD (SIGN-BASED)
-# -------------------------
-@app.get("/api/dashboard")
-def dashboard():
+    records = df.to_dict(orient="records")
 
     with engine.begin() as conn:
 
-        # prefer income_statement
-        has_is = conn.execute(text("""
-            SELECT COUNT(*) FROM financial_data
+        conn.execute(text("""
+            INSERT INTO financial_data
+            (date, description, category, amount, doc_type, fingerprint)
+            VALUES (:Date, :Description, :Category, :Amount, :doc_type, :fingerprint)
+            ON CONFLICT (fingerprint) DO NOTHING
+        """), [
+            {
+                "Date": r["Date"],
+                "Description": r["Description"],
+                "Category": r["Category"],
+                "Amount": float(r["Amount"]),
+                "doc_type": doc_type,
+                "fingerprint": r["fingerprint"]
+            }
+            for r in records
+        ])
+
+        conn.execute(text("""
+            INSERT INTO upload_logs (filename, doc_type, rows_uploaded, rows_inserted)
+            VALUES (:f, :d, :u, :i)
+        """), {
+            "f": file.filename,
+            "d": doc_type,
+            "u": rows_uploaded,
+            "i": rows_uploaded
+        })
+
+    return {"uploaded": rows_uploaded}
+
+# -------------------------
+# DASHBOARD
+# -------------------------
+@app.get("/api/dashboard")
+def dashboard():
+    with engine.begin() as conn:
+        rows = conn.execute(text("""
+            SELECT
+                DATE_TRUNC('month', date) as month,
+                SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END) AS revenue,
+                SUM(CASE WHEN amount < 0 THEN ABS(amount) ELSE 0 END) AS expenses
+            FROM financial_data
             WHERE doc_type = 'income_statement'
-        """)).scalar()
+            GROUP BY month
+            ORDER BY month
+        """)).fetchall()
 
-        doc = "income_statement" if has_is > 0 else "general_ledger"
+    monthly = []
+    total_revenue = 0
+    total_expenses = 0
 
-        summary = conn.execute(text(f"""
-            SELECT
-                SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END),
-                SUM(CASE WHEN amount < 0 THEN ABS(amount) ELSE 0 END)
-            FROM financial_data
-            WHERE doc_type = :doc
-        """), {"doc": doc}).fetchone()
+    for r in rows:
+        revenue = float(r[1] or 0)
+        expenses = float(r[2] or 0)
 
-        monthly = conn.execute(text(f"""
-            SELECT
-                DATE_TRUNC('month', date),
+        monthly.append({
+            "month": str(r[0]),
+            "revenue": revenue,
+            "expenses": expenses,
+            "profit": revenue - expenses
+        })
 
-                SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END),
-                SUM(CASE WHEN amount < 0 THEN ABS(amount) ELSE 0 END)
-
-            FROM financial_data
-            WHERE doc_type = :doc
-            GROUP BY 1
-            ORDER BY 1
-        """), {"doc": doc}).fetchall()
-
-    revenue = float(summary[0] or 0)
-    expenses = float(summary[1] or 0)
-    profit = revenue - expenses
+        total_revenue += revenue
+        total_expenses += expenses
 
     return {
         "summary": {
-            "revenue": revenue,
-            "expenses": expenses,
-            "net_profit": profit,
-            "gross_margin": (profit / revenue) if revenue else 0
+            "revenue": total_revenue,
+            "expenses": total_expenses,
+            "net_profit": total_revenue - total_expenses,
+            "gross_margin": (total_revenue - total_expenses) / total_revenue if total_revenue else 0
         },
-        "monthly": [
+        "monthly": monthly
+    }
+
+# -------------------------
+# FILES API
+# -------------------------
+@app.get("/api/files")
+def get_files():
+    with engine.begin() as conn:
+        rows = conn.execute(text("""
+            SELECT filename, doc_type, rows_uploaded, rows_inserted, created_at
+            FROM upload_logs
+            ORDER BY created_at DESC
+        """)).fetchall()
+
+    return {
+        "data": [
             {
-                "month": str(r[0]),
-                "revenue": float(r[1]),
-                "expenses": float(r[2]),
-                "profit": float(r[1] - r[2])
+                "filename": r[0],
+                "doc_type": r[1],
+                "rows_uploaded": r[2],
+                "rows_inserted": r[3],
+                "created_at": str(r[4])
             }
-            for r in monthly
+            for r in rows
+        ]
+    }
+
+# -------------------------
+# COVERAGE API
+# -------------------------
+@app.get("/api/coverage")
+def get_coverage():
+    with engine.begin() as conn:
+        rows = conn.execute(text("""
+            SELECT doc_type, COUNT(*) as count
+            FROM financial_data
+            GROUP BY doc_type
+        """)).fetchall()
+
+    return {
+        "data": [
+            {
+                "doc_type": r[0],
+                "records": r[1]
+            }
+            for r in rows
         ]
     }

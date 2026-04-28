@@ -16,65 +16,30 @@ export default function Home() {
 
   useEffect(() => {
     async function load() {
-      try {
-        const dashboard = await getDashboard();
-        const fileList = await getFiles();
-        const cov = await getCoverage();
+      const d = await getDashboard();
+      const f = await getFiles();
+      const c = await getCoverage();
 
-        setData(dashboard);
-        setFiles(fileList?.data || []);
-        setCoverage(cov?.data || []);
-      } catch (err) {
-        console.error("Load error:", err);
-        setData({ error: true });
-      } finally {
-        setLoading(false);
-      }
+      setData(d);
+      setFiles(f?.data || []);
+      setCoverage(c?.data || []);
+      setLoading(false);
     }
 
     load();
   }, []);
 
-  // 🔄 Loading state
-  if (loading) {
-    return (
-      <div>
-        <Navbar />
-        <div className="p-6">Loading dashboard...</div>
-      </div>
-    );
-  }
+  if (loading) return <div className="p-6">Loading...</div>;
 
-  // ❌ No data / API failed
-  if (!data || data.error) {
-    return (
-      <div>
-        <Navbar />
-        <div className="p-6 space-y-4">
-          <h2 className="text-xl font-semibold">No data yet</h2>
-          <p>Upload your financial CSV to get started.</p>
-          <UploadPanel />
-        </div>
-      </div>
-    );
-  }
+  if (!data) return <UploadPanel />;
 
-  // ✅ Main dashboard
   return (
     <div>
       <Navbar />
-
       <div className="p-6 space-y-6">
-        {/* KPI Summary */}
-        <KPICards data={data.summary || data} />
-
-        {/* Upload */}
+        <KPICards data={data.summary} />
         <UploadPanel />
-
-        {/* Uploaded files */}
         <FileTable files={files} />
-
-        {/* Coverage */}
         <CoverageTracker data={coverage} />
       </div>
     </div>

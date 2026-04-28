@@ -6,25 +6,15 @@ async function fetchAPI(endpoint: string) {
       cache: "no-store",
     });
 
-    if (!res.ok) {
-      throw new Error(`API error: ${res.status}`);
-    }
+    if (!res.ok) throw new Error("API error");
 
     return await res.json();
-  } catch (error) {
-    console.error(`Error fetching ${endpoint}:`, error);
+  } catch (err) {
+    console.error(err);
     return null;
   }
 }
 
-export async function getDashboard() {
-  return fetchAPI("/api/dashboard");
-}
-
-export async function getFiles() {
-  return fetchAPI("/api/files");
-}
-
-export async function getCoverage() {
-  return fetchAPI("/api/coverage");
-}
+export const getDashboard = () => fetchAPI("/api/dashboard");
+export const getFiles = () => fetchAPI("/api/files");
+export const getCoverage = () => fetchAPI("/api/coverage");
