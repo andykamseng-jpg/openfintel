@@ -36,9 +36,7 @@ def clean_text(x):
 # SAFE COLUMN
 # -------------------------
 def safe_col(df, col):
-    if col in df.columns:
-        return df[col]
-    return pd.Series([""] * len(df))
+    return df[col] if col in df.columns else pd.Series([""] * len(df))
 
 # -------------------------
 # HASH (DEDUP)
@@ -52,11 +50,9 @@ def generate_hash(df):
     ).apply(lambda x: hashlib.sha256(x.encode()).hexdigest())
 
 # -------------------------
-# NORMALIZE PER REPORT
+# NORMALIZE
 # -------------------------
 def normalize(df, doc_type):
-
-    df.columns = df.columns.str.strip()
 
     if doc_type == "income_statement":
         df["Amount"] = pd.to_numeric(safe_col(df, "Amount"), errors="coerce")
@@ -68,32 +64,21 @@ def normalize(df, doc_type):
         df["Amount"] = debit - credit
         df["Category"] = safe_col(df, "Account").apply(clean_text)
 
-    elif doc_type == "balance_sheet":
-        df["Amount"] = pd.to_numeric(safe_col(df, "Value"), errors="coerce")
-        df["Category"] = safe_col(df, "Asset").apply(clean_text)
-
-    elif doc_type == "cash_flow":
-        df["Amount"] = pd.to_numeric(safe_col(df, "Amount"), errors="coerce")
-        df["Category"] = safe_col(df, "Category").apply(clean_text)
-
-    elif doc_type == "expense_breakdown":
-        df["Amount"] = pd.to_numeric(safe_col(df, "Amount"), errors="coerce")
-        df["Category"] = safe_col(df, "Category").apply(clean_text)
-
     else:
-        raise ValueError(f"Unsupported doc_type: {doc_type}")
+        df["Amount"] = pd.to_numeric(safe_col(df, "Amount"), errors="coerce")
+        df["Category"] = safe_col(df, "Category").apply(clean_text)
 
     return df
 
 # -------------------------
-# CHUNK INSERT
+# BATCH
 # -------------------------
 def chunked(data, size=50):
     for i in range(0, len(data), size):
         yield data[i:i + size]
 
 # -------------------------
-# UPLOAD API
+# UPLOAD
 # -------------------------
 @app.post("/api/upload")
 async def upload(file: UploadFile, doc_type: str = Form(...)):
@@ -101,24 +86,19 @@ async def upload(file: UploadFile, doc_type: str = Form(...)):
         df = pd.read_csv(file.file)
         df.columns = df.columns.str.strip()
 
-        # clean garbage rows
         df = df.replace(r'^\s*$', None, regex=True)
         df = df.dropna(how="all")
         df = df.loc[~df.apply(lambda r: r.astype(str).str.strip().eq("").all(), axis=1)]
 
-        # date
         df["Date"] = pd.to_datetime(df.get("Date"), errors="coerce").dt.date
 
-        # description
         if "Description" in df.columns:
             df["Description"] = df["Description"].apply(clean_text)
         else:
             df["Description"] = ""
 
-        # normalize
         df = normalize(df, doc_type)
 
-        # validate
         df = df[
             df["Date"].notna() &
             df["Amount"].notna() &
@@ -128,16 +108,13 @@ async def upload(file: UploadFile, doc_type: str = Form(...)):
 
         rows_uploaded = len(df)
 
-        # fingerprint
         df["fingerprint"] = generate_hash(df)
         records = df.to_dict(orient="records")
 
         inserted = 0
 
         with engine.begin() as conn:
-
             for batch in chunked(records, 50):
-
                 result = conn.execute(text("""
                     INSERT INTO financial_data
                     (date, description, category, amount, doc_type, fingerprint)
@@ -158,37 +135,26 @@ async def upload(file: UploadFile, doc_type: str = Form(...)):
                 if result.rowcount:
                     inserted += result.rowcount
 
-            # audit log
-            conn.execute(text("""
-                INSERT INTO upload_logs (filename, doc_type, rows_uploaded, rows_inserted)
-                VALUES (:f, :d, :u, :i)
-            """), {
-                "f": file.filename,
-                "d": doc_type,
-                "u": rows_uploaded,
-                "i": inserted
-            })
-
         return {"uploaded": rows_uploaded, "inserted": inserted}
 
     except Exception as e:
         return {"error": str(e)}
 
 # -------------------------
-# DASHBOARD (AUTO + FIXED)
+# DASHBOARD (FIXED MAPPING)
 # -------------------------
 @app.get("/api/dashboard")
 def dashboard():
 
     with engine.begin() as conn:
 
-        check = conn.execute(text("""
+        has_is = conn.execute(text("""
             SELECT COUNT(*) FROM financial_data
             WHERE doc_type = 'income_statement'
         """)).scalar()
 
-        if check > 0:
-            # ✅ REAL CATEGORY MAPPING (FIXED)
+        if has_is > 0:
+
             summary = conn.execute(text("""
                 SELECT
                     SUM(CASE 
@@ -200,10 +166,13 @@ def dashboard():
 
                     SUM(CASE 
                         WHEN category IN (
-                            'rent & utilities','professional fees','staff entertainment',
-                            'operating supplies','wastage','utilities',
-                            'delivery platform fees','insurance',
-                            'technology','marketing','depreciation'
+                            'cost of goods sold','cogs','ingredients','raw materials',
+                            'wages','salaries','staff cost','staff wages',
+                            'rent','rent & utilities','utilities',
+                            'operating supplies','wastage',
+                            'marketing','insurance','technology',
+                            'professional fees','staff entertainment',
+                            'delivery platform fees','depreciation'
                         )
                         THEN ABS(amount) ELSE 0 END)
 
@@ -224,10 +193,13 @@ def dashboard():
 
                     SUM(CASE 
                         WHEN category IN (
-                            'rent & utilities','professional fees','staff entertainment',
-                            'operating supplies','wastage','utilities',
-                            'delivery platform fees','insurance',
-                            'technology','marketing','depreciation'
+                            'cost of goods sold','cogs','ingredients','raw materials',
+                            'wages','salaries','staff cost','staff wages',
+                            'rent','rent & utilities','utilities',
+                            'operating supplies','wastage',
+                            'marketing','insurance','technology',
+                            'professional fees','staff entertainment',
+                            'delivery platform fees','depreciation'
                         )
                         THEN ABS(amount) ELSE 0 END)
 
@@ -240,37 +212,18 @@ def dashboard():
         else:
             # fallback GL
             summary = conn.execute(text("""
-                SELECT
-                    0,
-                    SUM(CASE 
-                        WHEN category IN (
-                            'rent & utilities','professional fees','staff entertainment',
-                            'operating supplies','wastage','utilities',
-                            'delivery platform fees','insurance',
-                            'technology','marketing','depreciation'
-                        )
-                        THEN ABS(amount) ELSE 0 END)
+                SELECT 0,
+                SUM(CASE 
+                    WHEN category IN (
+                        'rent & utilities','utilities','marketing','insurance',
+                        'technology','delivery platform fees'
+                    )
+                    THEN ABS(amount) ELSE 0 END)
                 FROM financial_data
                 WHERE doc_type = 'general_ledger'
             """)).fetchone()
 
-            monthly = conn.execute(text("""
-                SELECT
-                    DATE_TRUNC('month', date),
-                    0,
-                    SUM(CASE 
-                        WHEN category IN (
-                            'rent & utilities','professional fees','staff entertainment',
-                            'operating supplies','wastage','utilities',
-                            'delivery platform fees','insurance',
-                            'technology','marketing','depreciation'
-                        )
-                        THEN ABS(amount) ELSE 0 END)
-                FROM financial_data
-                WHERE doc_type = 'general_ledger'
-                GROUP BY 1
-                ORDER BY 1
-            """)).fetchall()
+            monthly = []
 
     revenue = float(summary[0] or 0)
     expenses = float(summary[1] or 0)
