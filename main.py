@@ -14,7 +14,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ✅ stable DB connection
+# ✅ stable connection
 engine = create_engine(
     os.getenv("DATABASE_URL"),
     pool_pre_ping=True
@@ -98,10 +98,8 @@ def chunked(data, size=50):
 # -------------------------
 @app.post("/api/upload")
 async def upload(file: UploadFile, doc_type: str = Form(...)):
-
     try:
         df = pd.read_csv(file.file)
-
         df.columns = df.columns.str.strip()
 
         # clean empty rows
@@ -178,68 +176,78 @@ async def upload(file: UploadFile, doc_type: str = Form(...)):
         return {"error": str(e)}
 
 # -------------------------
-# DASHBOARD (GL BASED)
+# DASHBOARD (AUTO SOURCE)
 # -------------------------
 @app.get("/api/dashboard")
 def dashboard():
 
     with engine.begin() as conn:
 
-        summary = conn.execute(text("""
-            SELECT
-                0 AS revenue,
+        # check income_statement exists
+        check = conn.execute(text("""
+            SELECT COUNT(*) FROM financial_data
+            WHERE doc_type = 'income_statement'
+        """)).scalar()
 
-                SUM(CASE 
-                    WHEN category IN (
-                        'rent & utilities',
-                        'professional fees',
-                        'staff entertainment',
-                        'operating supplies',
-                        'wastage',
-                        'utilities',
-                        'delivery platform fees',
-                        'insurance',
-                        'technology',
-                        'marketing',
-                        'depreciation'
-                    )
-                    THEN ABS(amount)
-                    ELSE 0
-                END) AS expenses
+        if check > 0:
+            # ✅ use income statement
+            summary = conn.execute(text("""
+                SELECT
+                    SUM(CASE WHEN category = 'revenue' THEN amount ELSE 0 END),
+                    SUM(CASE WHEN category = 'expenses' THEN amount ELSE 0 END)
+                FROM financial_data
+                WHERE doc_type = 'income_statement'
+            """)).fetchone()
 
-            FROM financial_data
-            WHERE doc_type = 'general_ledger'
-        """)).fetchone()
+            monthly = conn.execute(text("""
+                SELECT
+                    DATE_TRUNC('month', date),
+                    SUM(CASE WHEN category = 'revenue' THEN amount ELSE 0 END),
+                    SUM(CASE WHEN category = 'expenses' THEN amount ELSE 0 END)
+                FROM financial_data
+                WHERE doc_type = 'income_statement'
+                GROUP BY 1
+                ORDER BY 1
+            """)).fetchall()
 
-        monthly = conn.execute(text("""
-            SELECT
-                DATE_TRUNC('month', date),
+        else:
+            # fallback to general ledger
+            summary = conn.execute(text("""
+                SELECT
+                    0,
+                    SUM(CASE 
+                        WHEN category IN (
+                            'rent & utilities','professional fees','staff entertainment',
+                            'operating supplies','wastage','utilities',
+                            'delivery platform fees','insurance',
+                            'technology','marketing','depreciation'
+                        )
+                        THEN ABS(amount)
+                        ELSE 0
+                    END)
+                FROM financial_data
+                WHERE doc_type = 'general_ledger'
+            """)).fetchone()
 
-                0 AS revenue,
-
-                SUM(CASE 
-                    WHEN category IN (
-                        'rent & utilities',
-                        'professional fees',
-                        'staff entertainment',
-                        'operating supplies',
-                        'wastage',
-                        'utilities',
-                        'delivery platform fees',
-                        'insurance',
-                        'technology',
-                        'marketing',
-                        'depreciation'
-                    )
-                    THEN ABS(amount)
-                    ELSE 0
-                END)
-
-            FROM financial_data
-            WHERE doc_type = 'general_ledger'
-            GROUP BY 1
-            ORDER BY 1
-        """)).fetchall()
+            monthly = conn.execute(text("""
+                SELECT
+                    DATE_TRUNC('month', date),
+                    0,
+                    SUM(CASE 
+                        WHEN category IN (
+                            'rent & utilities','professional fees','staff entertainment',
+                            'operating supplies','wastage','utilities',
+                            'delivery platform fees','insurance',
+                            'technology','marketing','depreciation'
+                        )
+                        THEN ABS(amount)
+                        ELSE 0
+                    END)
+                FROM financial_data
+                WHERE doc_type = 'general_ledger'
+                GROUP BY 1
+                ORDER BY 1
+            """)).fetchall()
 
     revenue = float(summary[0] or 0)
     expenses = float(summary[1] or 0)
