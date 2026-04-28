@@ -14,7 +14,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ✅ stable connection
 engine = create_engine(
     os.getenv("DATABASE_URL"),
     pool_pre_ping=True
@@ -87,7 +86,7 @@ def normalize(df, doc_type):
     return df
 
 # -------------------------
-# BATCH HELPER
+# CHUNK INSERT
 # -------------------------
 def chunked(data, size=50):
     for i in range(0, len(data), size):
@@ -102,7 +101,7 @@ async def upload(file: UploadFile, doc_type: str = Form(...)):
         df = pd.read_csv(file.file)
         df.columns = df.columns.str.strip()
 
-        # clean empty rows
+        # clean garbage rows
         df = df.replace(r'^\s*$', None, regex=True)
         df = df.dropna(how="all")
         df = df.loc[~df.apply(lambda r: r.astype(str).str.strip().eq("").all(), axis=1)]
@@ -176,25 +175,38 @@ async def upload(file: UploadFile, doc_type: str = Form(...)):
         return {"error": str(e)}
 
 # -------------------------
-# DASHBOARD (AUTO SOURCE)
+# DASHBOARD (AUTO + FIXED)
 # -------------------------
 @app.get("/api/dashboard")
 def dashboard():
 
     with engine.begin() as conn:
 
-        # check income_statement exists
         check = conn.execute(text("""
             SELECT COUNT(*) FROM financial_data
             WHERE doc_type = 'income_statement'
         """)).scalar()
 
         if check > 0:
-            # ✅ use income statement
+            # ✅ REAL CATEGORY MAPPING (FIXED)
             summary = conn.execute(text("""
                 SELECT
-                    SUM(CASE WHEN category = 'revenue' THEN amount ELSE 0 END),
-                    SUM(CASE WHEN category = 'expenses' THEN amount ELSE 0 END)
+                    SUM(CASE 
+                        WHEN category IN (
+                            'dine-in sales','takeaway sales',
+                            'delivery sales','catering revenue'
+                        )
+                        THEN amount ELSE 0 END),
+
+                    SUM(CASE 
+                        WHEN category IN (
+                            'rent & utilities','professional fees','staff entertainment',
+                            'operating supplies','wastage','utilities',
+                            'delivery platform fees','insurance',
+                            'technology','marketing','depreciation'
+                        )
+                        THEN ABS(amount) ELSE 0 END)
+
                 FROM financial_data
                 WHERE doc_type = 'income_statement'
             """)).fetchone()
@@ -202,8 +214,23 @@ def dashboard():
             monthly = conn.execute(text("""
                 SELECT
                     DATE_TRUNC('month', date),
-                    SUM(CASE WHEN category = 'revenue' THEN amount ELSE 0 END),
-                    SUM(CASE WHEN category = 'expenses' THEN amount ELSE 0 END)
+
+                    SUM(CASE 
+                        WHEN category IN (
+                            'dine-in sales','takeaway sales',
+                            'delivery sales','catering revenue'
+                        )
+                        THEN amount ELSE 0 END),
+
+                    SUM(CASE 
+                        WHEN category IN (
+                            'rent & utilities','professional fees','staff entertainment',
+                            'operating supplies','wastage','utilities',
+                            'delivery platform fees','insurance',
+                            'technology','marketing','depreciation'
+                        )
+                        THEN ABS(amount) ELSE 0 END)
+
                 FROM financial_data
                 WHERE doc_type = 'income_statement'
                 GROUP BY 1
@@ -211,7 +238,7 @@ def dashboard():
             """)).fetchall()
 
         else:
-            # fallback to general ledger
+            # fallback GL
             summary = conn.execute(text("""
                 SELECT
                     0,
@@ -222,9 +249,7 @@ def dashboard():
                             'delivery platform fees','insurance',
                             'technology','marketing','depreciation'
                         )
-                        THEN ABS(amount)
-                        ELSE 0
-                    END)
+                        THEN ABS(amount) ELSE 0 END)
                 FROM financial_data
                 WHERE doc_type = 'general_ledger'
             """)).fetchone()
@@ -240,9 +265,7 @@ def dashboard():
                             'delivery platform fees','insurance',
                             'technology','marketing','depreciation'
                         )
-                        THEN ABS(amount)
-                        ELSE 0
-                    END)
+                        THEN ABS(amount) ELSE 0 END)
                 FROM financial_data
                 WHERE doc_type = 'general_ledger'
                 GROUP BY 1
