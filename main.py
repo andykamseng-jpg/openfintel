@@ -49,7 +49,7 @@ def generate_hash(df):
     ).apply(lambda x: hashlib.sha256(x.encode()).hexdigest())
 
 # -------------------------
-# NORMALIZE PER REPORT TYPE
+# NORMALIZE PER REPORT
 # -------------------------
 def normalize(df, doc_type):
 
@@ -83,7 +83,7 @@ def normalize(df, doc_type):
     return df
 
 # -------------------------
-# UPLOAD ENDPOINT
+# UPLOAD
 # -------------------------
 @app.post("/api/upload")
 async def upload(file: UploadFile, doc_type: str = Form(...)):
@@ -91,27 +91,21 @@ async def upload(file: UploadFile, doc_type: str = Form(...)):
     try:
         df = pd.read_csv(file.file)
 
-        # Clean columns
         df.columns = df.columns.str.strip()
 
-        # Remove empty rows
         df = df.replace(r'^\s*$', None, regex=True)
         df = df.dropna(how="all")
         df = df.loc[~df.apply(lambda r: r.astype(str).str.strip().eq("").all(), axis=1)]
 
-        # Normalize date
         df["Date"] = pd.to_datetime(df.get("Date"), errors="coerce").dt.date
 
-        # Ensure description exists
         if "Description" in df.columns:
             df["Description"] = df["Description"].apply(clean_text)
         else:
             df["Description"] = ""
 
-        # Normalize based on report
         df = normalize(df, doc_type)
 
-        # Validate rows
         df = df[
             df["Date"].notna() &
             df["Amount"].notna() &
@@ -121,9 +115,7 @@ async def upload(file: UploadFile, doc_type: str = Form(...)):
 
         rows_uploaded = len(df)
 
-        # Generate fingerprint
         df["fingerprint"] = generate_hash(df)
-
         records = df.to_dict(orient="records")
 
         with engine.begin() as conn:
@@ -148,7 +140,6 @@ async def upload(file: UploadFile, doc_type: str = Form(...)):
 
             inserted = len(result.fetchall())
 
-            # Audit log
             conn.execute(text("""
                 INSERT INTO upload_logs (filename, doc_type, rows_uploaded, rows_inserted)
                 VALUES (:f, :d, :u, :i)
@@ -159,22 +150,20 @@ async def upload(file: UploadFile, doc_type: str = Form(...)):
                 "i": inserted
             })
 
-        return {
-            "uploaded": rows_uploaded,
-            "inserted": inserted
-        }
+        return {"uploaded": rows_uploaded, "inserted": inserted}
 
     except Exception as e:
         return {"error": str(e)}
 
 # -------------------------
-# SUMMARY (Income Statement)
+# DASHBOARD (NEW)
 # -------------------------
-@app.get("/api/summary")
-def summary():
+@app.get("/api/dashboard")
+def dashboard():
 
     with engine.begin() as conn:
-        result = conn.execute(text("""
+
+        summary = conn.execute(text("""
             SELECT
                 SUM(CASE WHEN category = 'revenue' THEN amount ELSE 0 END),
                 SUM(CASE WHEN category = 'expenses' THEN amount ELSE 0 END)
@@ -182,55 +171,7 @@ def summary():
             WHERE doc_type = 'income_statement'
         """)).fetchone()
 
-    revenue = float(result[0] or 0)
-    expenses = float(result[1] or 0)
-
-    return {
-        "revenue": revenue,
-        "expenses": expenses,
-        "net_profit": revenue - expenses,
-        "gross_margin": ((revenue - expenses) / revenue) if revenue else 0
-    }
-
-# -------------------------
-# CASH FLOW
-# -------------------------
-@app.get("/api/cashflow")
-def cashflow():
-
-    with engine.begin() as conn:
-        total = conn.execute(text("""
-            SELECT SUM(amount)
-            FROM financial_data
-            WHERE doc_type = 'cash_flow'
-        """)).scalar()
-
-    return {"cash_flow": float(total or 0)}
-
-# -------------------------
-# BALANCE SHEET
-# -------------------------
-@app.get("/api/balance-sheet")
-def balance_sheet():
-
-    with engine.begin() as conn:
-        rows = conn.execute(text("""
-            SELECT category, SUM(amount)
-            FROM financial_data
-            WHERE doc_type = 'balance_sheet'
-            GROUP BY category
-        """)).fetchall()
-
-    return {r[0]: float(r[1]) for r in rows}
-
-# -------------------------
-# MONTHLY ANALYTICS
-# -------------------------
-@app.get("/api/monthly")
-def monthly():
-
-    with engine.begin() as conn:
-        rows = conn.execute(text("""
+        monthly = conn.execute(text("""
             SELECT
                 DATE_TRUNC('month', date),
                 SUM(CASE WHEN category = 'revenue' THEN amount ELSE 0 END),
@@ -241,12 +182,24 @@ def monthly():
             ORDER BY 1
         """)).fetchall()
 
-    return [
-        {
-            "month": str(r[0]),
-            "revenue": float(r[1]),
-            "expenses": float(r[2]),
-            "profit": float(r[1] - r[2])
-        }
-        for r in rows
-    ]
+    revenue = float(summary[0] or 0)
+    expenses = float(summary[1] or 0)
+    profit = revenue - expenses
+
+    return {
+        "summary": {
+            "revenue": revenue,
+            "expenses": expenses,
+            "net_profit": profit,
+            "gross_margin": (profit / revenue) if revenue else 0
+        },
+        "monthly": [
+            {
+                "month": str(r[0]),
+                "revenue": float(r[1]),
+                "expenses": float(r[2]),
+                "profit": float(r[1] - r[2])
+            }
+            for r in monthly
+        ]
+    }
