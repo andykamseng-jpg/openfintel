@@ -14,7 +14,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-engine = create_engine(os.getenv("DATABASE_URL"))
+# ✅ ONLY change: keep connection alive
+engine = create_engine(
+    os.getenv("DATABASE_URL"),
+    pool_pre_ping=True
+)
 
 # -------------------------
 # CLEAN TEXT
@@ -30,7 +34,7 @@ def clean_text(x):
     return x
 
 # -------------------------
-# SAFE COLUMN ACCESS
+# SAFE COLUMN
 # -------------------------
 def safe_col(df, col):
     if col in df.columns:
@@ -38,7 +42,7 @@ def safe_col(df, col):
     return pd.Series([""] * len(df))
 
 # -------------------------
-# HASH (DEDUP)
+# HASH
 # -------------------------
 def generate_hash(df):
     return (
@@ -49,7 +53,7 @@ def generate_hash(df):
     ).apply(lambda x: hashlib.sha256(x.encode()).hexdigest())
 
 # -------------------------
-# NORMALIZE PER REPORT
+# NORMALIZE
 # -------------------------
 def normalize(df, doc_type):
 
@@ -81,6 +85,13 @@ def normalize(df, doc_type):
         raise ValueError(f"Unsupported doc_type: {doc_type}")
 
     return df
+
+# -------------------------
+# SMALL SAFE BATCH (only fix for SSL issue)
+# -------------------------
+def chunked(data, size=50):
+    for i in range(0, len(data), size):
+        yield data[i:i + size]
 
 # -------------------------
 # UPLOAD
@@ -118,27 +129,32 @@ async def upload(file: UploadFile, doc_type: str = Form(...)):
         df["fingerprint"] = generate_hash(df)
         records = df.to_dict(orient="records")
 
+        inserted = 0
+
         with engine.begin() as conn:
 
-            result = conn.execute(text("""
-                INSERT INTO financial_data
-                (date, description, category, amount, doc_type, fingerprint)
-                VALUES (:Date, :Description, :Category, :Amount, :doc_type, :fingerprint)
-                ON CONFLICT (fingerprint) DO NOTHING
-                RETURNING 1
-            """), [
-                {
-                    "Date": r["Date"],
-                    "Description": r["Description"],
-                    "Category": r["Category"],
-                    "Amount": float(r["Amount"]),
-                    "doc_type": doc_type,
-                    "fingerprint": r["fingerprint"]
-                }
-                for r in records
-            ])
+            # ✅ ONLY CHANGE: batch insert to avoid SSL drop
+            for batch in chunked(records, 50):
 
-            inserted = len(result.fetchall())
+                result = conn.execute(text("""
+                    INSERT INTO financial_data
+                    (date, description, category, amount, doc_type, fingerprint)
+                    VALUES (:Date, :Description, :Category, :Amount, :doc_type, :fingerprint)
+                    ON CONFLICT (fingerprint) DO NOTHING
+                    RETURNING 1
+                """), [
+                    {
+                        "Date": r["Date"],
+                        "Description": r["Description"],
+                        "Category": r["Category"],
+                        "Amount": float(r["Amount"]),
+                        "doc_type": doc_type,
+                        "fingerprint": r["fingerprint"]
+                    }
+                    for r in batch
+                ])
+
+                inserted += len(result.fetchall())
 
             conn.execute(text("""
                 INSERT INTO upload_logs (filename, doc_type, rows_uploaded, rows_inserted)
@@ -156,7 +172,7 @@ async def upload(file: UploadFile, doc_type: str = Form(...)):
         return {"error": str(e)}
 
 # -------------------------
-# DASHBOARD (NEW)
+# DASHBOARD
 # -------------------------
 @app.get("/api/dashboard")
 def dashboard():
