@@ -7,6 +7,7 @@ import UploadPanel from "@/components/UploadPanel";
 import FileTable from "@/components/FileTable";
 import CoverageTracker from "@/components/CoverageTracker";
 import { getDashboard, getFiles, getCoverage } from "@/lib/api";
+import MonthlyChart from "@/components/MonthlyChart";
 
 export default function Home() {
   const [data, setData] = useState<any>(null);
