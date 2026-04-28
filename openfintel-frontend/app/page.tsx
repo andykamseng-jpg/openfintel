@@ -21,11 +21,11 @@ export default function Home() {
         const fileList = await getFiles();
         const cov = await getCoverage();
 
-        setData(dashboard || {});
+        setData(dashboard);
         setFiles(fileList?.data || []);
         setCoverage(cov?.data || []);
       } catch (err) {
-        console.error(err);
+        console.error("Load error:", err);
         setData({ error: true });
       } finally {
         setLoading(false);
@@ -35,27 +35,46 @@ export default function Home() {
     load();
   }, []);
 
-  if (loading) return <div className="p-6">Loading...</div>;
+  // 🔄 Loading state
+  if (loading) {
+    return (
+      <div>
+        <Navbar />
+        <div className="p-6">Loading dashboard...</div>
+      </div>
+    );
+  }
 
+  // ❌ No data / API failed
   if (!data || data.error) {
     return (
       <div>
         <Navbar />
-        <div className="p-6">
-          <h2>No data yet</h2>
+        <div className="p-6 space-y-4">
+          <h2 className="text-xl font-semibold">No data yet</h2>
+          <p>Upload your financial CSV to get started.</p>
           <UploadPanel />
         </div>
       </div>
     );
   }
 
+  // ✅ Main dashboard
   return (
     <div>
       <Navbar />
+
       <div className="p-6 space-y-6">
-        <KPICards data={data} />
+        {/* KPI Summary */}
+        <KPICards data={data.summary} />
+
+        {/* Upload */}
         <UploadPanel />
+
+        {/* Uploaded files */}
         <FileTable files={files} />
+
+        {/* Coverage */}
         <CoverageTracker data={coverage} />
       </div>
     </div>
