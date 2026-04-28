@@ -1,13 +1,22 @@
-export default function CoverageTracker({ data = [] }: any) {
-  return (
-    <div className="p-4 bg-white rounded shadow">
-      <h3>Data Coverage</h3>
+export default function CoverageTracker({ data }: { data: any[] }) {
+  if (!data || data.length === 0) {
+    return (
+      <div className="bg-white p-4 rounded-2xl shadow">
+        <h2 className="text-lg font-semibold mb-2">Data Coverage</h2>
+        <p className="text-gray-500">No data coverage available yet.</p>
+      </div>
+    );
+  }
 
-      {data.length === 0 ? (
-        <p>No data coverage available yet.</p>
-      ) : (
-        <p>{data.length} days tracked</p>
-      )}
+  return (
+    <div className="bg-white p-4 rounded-2xl shadow">
+      <h2 className="text-lg font-semibold mb-4">Data Coverage</h2>
+
+      {data.map((c, i) => (
+        <div key={i} className="text-sm">
+          {c.doc_type}: {c.days} days tracked
+        </div>
+      ))}
     </div>
   );
 }

@@ -6,11 +6,14 @@ async function fetchAPI(endpoint: string) {
       cache: "no-store",
     });
 
-    if (!res.ok) throw new Error("API error");
+    if (!res.ok) {
+      console.error("API error:", res.status);
+      return null;
+    }
 
     return await res.json();
   } catch (err) {
-    console.error(err);
+    console.error("Fetch failed:", err);
     return null;
   }
 }

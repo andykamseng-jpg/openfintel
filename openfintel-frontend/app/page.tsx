@@ -6,8 +6,9 @@ import KPICards from "@/components/KPICards";
 import UploadPanel from "@/components/UploadPanel";
 import FileTable from "@/components/FileTable";
 import CoverageTracker from "@/components/CoverageTracker";
-import { getDashboard, getFiles, getCoverage } from "@/lib/api";
 import MonthlyChart from "@/components/MonthlyChart";
+
+import { getDashboard, getFiles, getCoverage } from "@/lib/api";
 
 export default function Home() {
   const [data, setData] = useState<any>(null);
@@ -17,31 +18,56 @@ export default function Home() {
 
   useEffect(() => {
     async function load() {
-      const d = await getDashboard();
-      const f = await getFiles();
-      const c = await getCoverage();
+      const dashboard = await getDashboard();
+      const fileList = await getFiles();
+      const cov = await getCoverage();
 
-      setData(d);
-      setFiles(f?.data || []);
-      setCoverage(c?.data || []);
+      setData(dashboard || null);
+      setFiles(fileList?.data || []);
+      setCoverage(cov?.data || []);
       setLoading(false);
     }
 
     load();
   }, []);
 
-  if (loading) return <div className="p-6">Loading...</div>;
+  if (loading) {
+    return <div className="p-6">Loading...</div>;
+  }
 
-  if (!data) return <UploadPanel />;
+  if (!data) {
+    return (
+      <div>
+        <Navbar />
+        <div className="p-6 space-y-4">
+          <h2>No data yet</h2>
+          <UploadPanel />
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div>
       <Navbar />
+
       <div className="p-6 space-y-6">
+
+        {/* KPI */}
         <KPICards data={data.summary} />
+
+        {/* 📈 Monthly Chart */}
+        <MonthlyChart data={data.monthly} />
+
+        {/* Upload */}
         <UploadPanel />
+
+        {/* Files */}
         <FileTable files={files} />
+
+        {/* Coverage */}
         <CoverageTracker data={coverage} />
+
       </div>
     </div>
   );
