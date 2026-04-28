@@ -14,7 +14,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ✅ stable connection (fix SSL drop)
+# ✅ stable DB connection
 engine = create_engine(
     os.getenv("DATABASE_URL"),
     pool_pre_ping=True
@@ -87,7 +87,7 @@ def normalize(df, doc_type):
     return df
 
 # -------------------------
-# BATCH HELPER (fix SSL)
+# BATCH HELPER
 # -------------------------
 def chunked(data, size=50):
     for i in range(0, len(data), size):
@@ -139,7 +139,6 @@ async def upload(file: UploadFile, doc_type: str = Form(...)):
 
         with engine.begin() as conn:
 
-            # ✅ stable batch insert
             for batch in chunked(records, 50):
 
                 result = conn.execute(text("""
@@ -159,7 +158,6 @@ async def upload(file: UploadFile, doc_type: str = Form(...)):
                     for r in batch
                 ])
 
-                # ✅ correct count (no RETURNING bug)
                 if result.rowcount:
                     inserted += result.rowcount
 
@@ -180,7 +178,7 @@ async def upload(file: UploadFile, doc_type: str = Form(...)):
         return {"error": str(e)}
 
 # -------------------------
-# DASHBOARD API
+# DASHBOARD (GL BASED)
 # -------------------------
 @app.get("/api/dashboard")
 def dashboard():
@@ -189,19 +187,56 @@ def dashboard():
 
         summary = conn.execute(text("""
             SELECT
-                SUM(CASE WHEN category = 'revenue' THEN amount ELSE 0 END),
-                SUM(CASE WHEN category = 'expenses' THEN amount ELSE 0 END)
+                0 AS revenue,
+
+                SUM(CASE 
+                    WHEN category IN (
+                        'rent & utilities',
+                        'professional fees',
+                        'staff entertainment',
+                        'operating supplies',
+                        'wastage',
+                        'utilities',
+                        'delivery platform fees',
+                        'insurance',
+                        'technology',
+                        'marketing',
+                        'depreciation'
+                    )
+                    THEN ABS(amount)
+                    ELSE 0
+                END) AS expenses
+
             FROM financial_data
-            WHERE doc_type = 'income_statement'
+            WHERE doc_type = 'general_ledger'
         """)).fetchone()
 
         monthly = conn.execute(text("""
             SELECT
                 DATE_TRUNC('month', date),
-                SUM(CASE WHEN category = 'revenue' THEN amount ELSE 0 END),
-                SUM(CASE WHEN category = 'expenses' THEN amount ELSE 0 END)
+
+                0 AS revenue,
+
+                SUM(CASE 
+                    WHEN category IN (
+                        'rent & utilities',
+                        'professional fees',
+                        'staff entertainment',
+                        'operating supplies',
+                        'wastage',
+                        'utilities',
+                        'delivery platform fees',
+                        'insurance',
+                        'technology',
+                        'marketing',
+                        'depreciation'
+                    )
+                    THEN ABS(amount)
+                    ELSE 0
+                END)
+
             FROM financial_data
-            WHERE doc_type = 'income_statement'
+            WHERE doc_type = 'general_ledger'
             GROUP BY 1
             ORDER BY 1
         """)).fetchall()
