@@ -47,7 +47,7 @@ def clean_text(x):
     return x
 
 # -------------------------
-# HASH (DEDUP)
+# HASH
 # -------------------------
 def generate_hash(row):
     raw = "|".join([
@@ -141,27 +141,28 @@ async def upload(file: UploadFile, doc_type: str = Form(...)):
         raise HTTPException(status_code=500, detail=str(e))
 
 # -------------------------
-# DASHBOARD API (FIXED 🔥)
+# DASHBOARD API
 # -------------------------
 @app.get("/api/dashboard")
 def dashboard():
     try:
         with engine.begin() as conn:
 
-            # --- GRAPH DATA ---
+            # Graph data
             rows = conn.execute(text("""
                 SELECT category, amount
                 FROM financial_data
                 WHERE doc_type = 'income_statement'
             """)).fetchall()
 
-            # --- MONTHLY DATA (NEW FIX) ---
+            # Monthly data (FIXED)
             monthly_rows = conn.execute(text("""
                 SELECT 
                     DATE_TRUNC('month', date) as month,
                     SUM(amount) as total
                 FROM financial_data
                 WHERE doc_type = 'income_statement'
+                AND date IS NOT NULL
                 GROUP BY month
                 ORDER BY month
             """)).fetchall()
@@ -179,13 +180,13 @@ def dashboard():
 
         kpis = result.get("kpis", {})
 
-        # --- FORMAT MONTHLY ---
+        # Format monthly properly
         monthly_data = [
             {
-                "month": str(r[0]),
+                "month": r[0].strftime("%Y-%m"),
                 "value": float(r[1])
             }
-            for r in monthly_rows
+            for r in monthly_rows if r[0] is not None
         ]
 
         return {
@@ -199,7 +200,7 @@ def dashboard():
                 )
             },
             "graph": result.get("graph", {}),
-            "monthly": monthly_data   # ✅ FIXED
+            "monthly": monthly_data
         }
 
     except Exception as e:
@@ -256,49 +257,41 @@ def simulate(data: SimulationInput):
 # -------------------------
 @app.get("/api/files")
 def get_files():
-    try:
-        with engine.begin() as conn:
-            rows = conn.execute(text("""
-                SELECT filename, doc_type, rows_uploaded, rows_inserted, created_at
-                FROM upload_logs
-                ORDER BY created_at DESC
-            """)).fetchall()
+    with engine.begin() as conn:
+        rows = conn.execute(text("""
+            SELECT filename, doc_type, rows_uploaded, rows_inserted, created_at
+            FROM upload_logs
+            ORDER BY created_at DESC
+        """)).fetchall()
 
-        return {
-            "data": [
-                {
-                    "filename": r[0],
-                    "doc_type": r[1],
-                    "rows_uploaded": r[2],
-                    "rows_inserted": r[3],
-                    "created_at": str(r[4])
-                }
-                for r in rows
-            ]
-        }
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    return {
+        "data": [
+            {
+                "filename": r[0],
+                "doc_type": r[1],
+                "rows_uploaded": r[2],
+                "rows_inserted": r[3],
+                "created_at": str(r[4])
+            }
+            for r in rows
+        ]
+    }
 
 # -------------------------
 # COVERAGE API
 # -------------------------
 @app.get("/api/coverage")
 def get_coverage():
-    try:
-        with engine.begin() as conn:
-            rows = conn.execute(text("""
-                SELECT doc_type, COUNT(*) as count
-                FROM financial_data
-                GROUP BY doc_type
-            """)).fetchall()
+    with engine.begin() as conn:
+        rows = conn.execute(text("""
+            SELECT doc_type, COUNT(*) as count
+            FROM financial_data
+            GROUP BY doc_type
+        """)).fetchall()
 
-        return {
-            "data": [
-                {"doc_type": r[0], "records": r[1]}
-                for r in rows
-            ]
-        }
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    return {
+        "data": [
+            {"doc_type": r[0], "records": r[1]}
+            for r in rows
+        ]
+    }
