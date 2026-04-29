@@ -7,7 +7,6 @@ import UploadPanel from "@/components/UploadPanel";
 import FileTable from "@/components/FileTable";
 import CoverageTracker from "@/components/CoverageTracker";
 import MonthlyChart from "@/components/MonthlyChart";
-
 import { getDashboard, getFiles, getCoverage } from "@/lib/api";
 
 export default function Home() {
@@ -16,32 +15,38 @@ export default function Home() {
   const [coverage, setCoverage] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    async function load() {
+  // ✅ moved out so it can be reused
+  async function load() {
+    try {
       const dashboard = await getDashboard();
       const fileList = await getFiles();
       const cov = await getCoverage();
 
-      setData(dashboard || null);
+      setData(dashboard || {});
       setFiles(fileList?.data || []);
       setCoverage(cov?.data || []);
+    } catch (err) {
+      console.error(err);
+      setData({ error: true });
+    } finally {
       setLoading(false);
     }
+  }
 
+  useEffect(() => {
     load();
   }, []);
 
-  if (loading) {
-    return <div className="p-6">Loading...</div>;
-  }
+  if (loading) return <div className="p-6">Loading...</div>;
 
-  if (!data) {
+  if (!data || data.error) {
     return (
       <div>
         <Navbar />
-        <div className="p-6 space-y-4">
+        <div className="p-6">
           <h2>No data yet</h2>
-          <UploadPanel />
+          {/* ✅ added callback */}
+          <UploadPanel onUploadSuccess={load} />
         </div>
       </div>
     );
@@ -50,24 +55,13 @@ export default function Home() {
   return (
     <div>
       <Navbar />
-
       <div className="p-6 space-y-6">
-
-        {/* KPI */}
         <KPICards data={data.summary} />
-
-        {/* 📈 Monthly Chart */}
         <MonthlyChart data={data.monthly} />
-
-        {/* Upload */}
-        <UploadPanel />
-
-        {/* Files */}
+        {/* ✅ added callback */}
+        <UploadPanel onUploadSuccess={load} />
         <FileTable files={files} />
-
-        {/* Coverage */}
         <CoverageTracker data={coverage} />
-
       </div>
     </div>
   );

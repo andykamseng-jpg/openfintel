@@ -2,37 +2,49 @@
 
 import { useState } from "react";
 
-export default function UploadPanel() {
+export default function UploadPanel({ onUploadSuccess }: any) {
   const [file, setFile] = useState<File | null>(null);
+  const [loading, setLoading] = useState(false);
 
-  const upload = async () => {
-    if (!file) return alert("Select a file");
+  async function handleUpload() {
+    if (!file) return;
+
+    setLoading(true);
 
     const formData = new FormData();
     formData.append("file", file);
-    formData.append("doc_type", "income_statement");
 
-    await fetch("https://openfintel.onrender.com/api/upload", {
-      method: "POST",
-      body: formData,
-    });
+    try {
+      await fetch("https://openfintel.onrender.com/api/upload", {
+        method: "POST",
+        body: formData,
+      });
 
-    alert("Uploaded!");
-    window.location.reload();
-  };
+      alert("Upload successful");
+
+      // ✅ ONLY important addition
+      if (onUploadSuccess) onUploadSuccess();
+
+    } catch (err) {
+      console.error(err);
+      alert("Upload failed");
+    } finally {
+      setLoading(false);
+    }
+  }
 
   return (
-    <div className="p-4 bg-white rounded shadow">
-      <h3 className="mb-2">Upload Document</h3>
+    <div className="border p-4 rounded">
       <input
         type="file"
         onChange={(e) => setFile(e.target.files?.[0] || null)}
       />
       <button
-        onClick={upload}
-        className="ml-2 px-3 py-1 bg-black text-white rounded"
+        onClick={handleUpload}
+        disabled={loading}
+        className="ml-2 px-4 py-2 bg-blue-500 text-white rounded"
       >
-        Upload
+        {loading ? "Uploading..." : "Upload"}
       </button>
     </div>
   );
