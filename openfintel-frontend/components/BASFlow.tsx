@@ -1,36 +1,101 @@
 "use client";
 
-export default function BASFlow({ data }: any) {
-  if (!data) return null;
+import { useEffect, useState } from "react";
+
+type GraphData = Record<string, number>;
+
+const EDITABLE_NODES = [
+  "units",
+  "price",
+  "variable_costs",
+  "fixed_costs",
+  "pos",
+  "supplier_payments",
+];
+
+export default function BASFlow({ data }: { data: GraphData }) {
+  const [graph, setGraph] = useState<GraphData>({});
+  const [editingNode, setEditingNode] = useState<string | null>(null);
+  const [inputValue, setInputValue] = useState("");
+
+  useEffect(() => {
+    setGraph(data);
+  }, [data]);
+
+  const handleEdit = (nodeId: string, value: number) => {
+    if (!EDITABLE_NODES.includes(nodeId)) return;
+    setEditingNode(nodeId);
+    setInputValue(String(value));
+  };
+
+  const handleSubmit = async () => {
+    if (!editingNode) return;
+
+    const newValue = parseFloat(inputValue);
+    if (isNaN(newValue)) {
+      setEditingNode(null);
+      return;
+    }
+
+    try {
+      const res = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL}/api/simulate`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            overrides: { [editingNode]: newValue },
+          }),
+        }
+      );
+
+      const result = await res.json();
+      if (result?.graph) setGraph(result.graph);
+
+    } catch (err) {
+      console.error("Simulation error:", err);
+    }
+
+    setEditingNode(null);
+  };
 
   return (
-    <div className="border rounded p-4 bg-white shadow">
-      <h2 className="text-lg font-bold mb-4">
-        Business Activity Flow
-      </h2>
+    <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+      {Object.entries(graph).map(([key, value]) => {
+        const isEditable = EDITABLE_NODES.includes(key);
 
-      <div className="grid grid-cols-2 md:grid-cols-3 gap-4 text-sm">
+        return (
+          <div
+            key={key}
+            className={`p-4 rounded-2xl shadow ${
+              isEditable ? "bg-blue-50 cursor-pointer" : "bg-gray-100"
+            }`}
+            onClick={() => handleEdit(key, value)}
+          >
+            <div className="text-sm text-gray-500">
+              {key.replace(/_/g, " ")}
+            </div>
 
-        <Box title="Revenue" value={data.revenue} />
-        <Box title="COGS" value={data.cogs} />
-        <Box title="Gross Margin" value={data.gross_margin} />
-
-        <Box title="Operating Expenses" value={data.operating_expenses} />
-        <Box title="Net Profit" value={data.net_profit} />
-        <Box title="Cash Flow" value={data.cash_flow} />
-
-      </div>
-    </div>
-  );
-}
-
-function Box({ title, value }: any) {
-  return (
-    <div className="p-3 border rounded bg-gray-50">
-      <div className="text-gray-500">{title}</div>
-      <div className="text-lg font-semibold">
-        {Number(value || 0).toLocaleString()}
-      </div>
+            {editingNode === key ? (
+              <input
+                autoFocus
+                type="number"
+                value={inputValue}
+                onChange={(e) => setInputValue(e.target.value)}
+                onBlur={handleSubmit}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") handleSubmit();
+                }}
+                className="mt-2 w-full border rounded px-2 py-1"
+              />
+            ) : (
+              <div className="text-xl font-bold mt-2">
+                {Number(value).toLocaleString()}
+              </div>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }

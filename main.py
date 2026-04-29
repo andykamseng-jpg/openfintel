@@ -1,11 +1,15 @@
+```python
 from fastapi import FastAPI, UploadFile, Form
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from typing import Dict, Optional
+
 import pandas as pd
 from sqlalchemy import create_engine, text
 import os, unicodedata, hashlib
 
-# 🔥 ENGINE IMPORT
-from engine.compute import compute_kpis
+from engine.adapter import run_engine
+from engine.mapper import map_db_to_engine
 
 app = FastAPI()
 
@@ -21,7 +25,7 @@ app.add_middleware(
 )
 
 # -------------------------
-# DB
+# DATABASE
 # -------------------------
 engine = create_engine(os.getenv("DATABASE_URL"))
 
@@ -51,58 +55,10 @@ def generate_hash(row):
     return hashlib.sha256(raw.encode()).hexdigest()
 
 # -------------------------
-# DRIVER MAPPING (CRITICAL)
+# REQUEST MODEL (SIMULATION)
 # -------------------------
-def map_to_drivers(rows):
-    drivers = {
-        "revenue": 0,
-
-        # COGS
-        "raw_materials": 0,
-        "supplier_cost": 0,
-        "waste": 0,
-
-        # OPEX
-        "rent": 0,
-        "wages": 0,
-        "utilities": 0,
-    }
-
-    for r in rows:
-        cat = (r["category"] or "").lower()
-        amt = float(r["amount"] or 0)
-
-        # -------------------------
-        # REVENUE
-        # -------------------------
-        if any(k in cat for k in ["sales", "revenue", "income"]):
-            drivers["revenue"] += abs(amt)
-
-        # -------------------------
-        # COGS
-        # -------------------------
-        elif any(k in cat for k in ["ingredient", "raw", "material", "food"]):
-            drivers["raw_materials"] += abs(amt)
-
-        elif "supplier" in cat:
-            drivers["supplier_cost"] += abs(amt)
-
-        elif any(k in cat for k in ["waste", "spoil", "loss"]):
-            drivers["waste"] += abs(amt)
-
-        # -------------------------
-        # OPEX
-        # -------------------------
-        elif "rent" in cat:
-            drivers["rent"] += abs(amt)
-
-        elif any(k in cat for k in ["salary", "wage", "staff"]):
-            drivers["wages"] += abs(amt)
-
-        elif any(k in cat for k in ["utility", "electric", "water"]):
-            drivers["utilities"] += abs(amt)
-
-    return drivers
+class SimulationInput(BaseModel):
+    overrides: Optional[Dict[str, float]] = None
 
 # -------------------------
 # UPLOAD API
@@ -129,7 +85,6 @@ async def upload(file: UploadFile, doc_type: str = Form(...)):
     rows_uploaded = len(df)
 
     df["fingerprint"] = df.apply(generate_hash, axis=1)
-
     records = df.to_dict(orient="records")
 
     with engine.begin() as conn:
@@ -164,7 +119,7 @@ async def upload(file: UploadFile, doc_type: str = Form(...)):
     return {"uploaded": rows_uploaded}
 
 # -------------------------
-# DASHBOARD (FIXED ENGINE)
+# DASHBOARD API
 # -------------------------
 @app.get("/api/dashboard")
 def dashboard():
@@ -172,28 +127,83 @@ def dashboard():
         rows = conn.execute(text("""
             SELECT category, amount
             FROM financial_data
+            WHERE doc_type = 'income_statement'
         """)).fetchall()
 
-    mapped = [
-        {"category": r[0], "amount": r[1]}
+    if not rows:
+        return {
+            "summary": {},
+            "graph": {},
+            "monthly": []
+        }
+
+    mapped_rows = [
+        {"category": str(r[0] or ""), "amount": float(r[1] or 0)}
         for r in rows
     ]
 
-    drivers = map_to_drivers(mapped)
+    drivers = map_db_to_engine(mapped_rows)
+    result = run_engine(drivers)
 
-    # 🔥 CORE ENGINE
-    kpis = compute_kpis(drivers)
+    kpis = result["kpis"]
 
     return {
         "summary": {
-            "revenue": kpis.get("revenue", 0),
-            "expenses": kpis.get("operating_expenses", 0),
-            "net_profit": kpis.get("net_profit", 0),
+            "revenue": kpis["revenue"],
+            "expenses": kpis["operating_expenses"],
+            "net_profit": kpis["net_profit"],
             "gross_margin": (
-                kpis.get("gross_margin", 0) / kpis.get("revenue", 1)
+                kpis["gross_margin"] / kpis["revenue"]
+                if kpis["revenue"] else 0
             )
         },
-        "graph": kpis
+        "graph": result["graph"],
+        "monthly": []
+    }
+
+# -------------------------
+# SIMULATION API (NEW 🔥)
+# -------------------------
+@app.post("/api/simulate")
+def simulate(data: SimulationInput):
+    with engine.begin() as conn:
+        rows = conn.execute(text("""
+            SELECT category, amount
+            FROM financial_data
+            WHERE doc_type = 'income_statement'
+        """)).fetchall()
+
+    if not rows:
+        return {
+            "summary": {},
+            "graph": {}
+        }
+
+    mapped_rows = [
+        {"category": str(r[0] or ""), "amount": float(r[1] or 0)}
+        for r in rows
+    ]
+
+    drivers = map_db_to_engine(mapped_rows)
+
+    result = run_engine(
+        drivers,
+        overrides=data.overrides
+    )
+
+    kpis = result["kpis"]
+
+    return {
+        "summary": {
+            "revenue": kpis["revenue"],
+            "expenses": kpis["operating_expenses"],
+            "net_profit": kpis["net_profit"],
+            "gross_margin": (
+                kpis["gross_margin"] / kpis["revenue"]
+                if kpis["revenue"] else 0
+            )
+        },
+        "graph": result["graph"]
     }
 
 # -------------------------
@@ -242,3 +252,4 @@ def get_coverage():
             for r in rows
         ]
     }
+```
