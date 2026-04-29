@@ -4,11 +4,14 @@ import pandas as pd
 from sqlalchemy import create_engine, text
 import os, unicodedata, hashlib
 
-# 🔥 ENGINE
-from engine.adapter import run_engine
+# 🔥 ENGINE IMPORT
+from engine.compute import compute_kpis
 
 app = FastAPI()
 
+# -------------------------
+# CORS
+# -------------------------
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -17,6 +20,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# -------------------------
+# DB
+# -------------------------
 engine = create_engine(os.getenv("DATABASE_URL"))
 
 # -------------------------
@@ -45,24 +51,61 @@ def generate_hash(row):
     return hashlib.sha256(raw.encode()).hexdigest()
 
 # -------------------------
-# CATEGORY CLASSIFIER 🔥
+# DRIVER MAPPING (CRITICAL)
 # -------------------------
-def classify_category(cat: str):
-    cat = (cat or "").lower()
+def map_to_drivers(rows):
+    drivers = {
+        "revenue": 0,
 
-    if any(k in cat for k in ["sales", "revenue", "income"]):
-        return "revenue"
+        # COGS
+        "raw_materials": 0,
+        "supplier_cost": 0,
+        "waste": 0,
 
-    if any(k in cat for k in ["ingredient", "inventory", "material", "cost of goods"]):
-        return "cogs"
+        # OPEX
+        "rent": 0,
+        "wages": 0,
+        "utilities": 0,
+    }
 
-    if any(k in cat for k in ["rent", "wage", "salary", "utility", "expense"]):
-        return "opex"
+    for r in rows:
+        cat = (r["category"] or "").lower()
+        amt = float(r["amount"] or 0)
 
-    return "other"
+        # -------------------------
+        # REVENUE
+        # -------------------------
+        if any(k in cat for k in ["sales", "revenue", "income"]):
+            drivers["revenue"] += abs(amt)
+
+        # -------------------------
+        # COGS
+        # -------------------------
+        elif any(k in cat for k in ["ingredient", "raw", "material", "food"]):
+            drivers["raw_materials"] += abs(amt)
+
+        elif "supplier" in cat:
+            drivers["supplier_cost"] += abs(amt)
+
+        elif any(k in cat for k in ["waste", "spoil", "loss"]):
+            drivers["waste"] += abs(amt)
+
+        # -------------------------
+        # OPEX
+        # -------------------------
+        elif "rent" in cat:
+            drivers["rent"] += abs(amt)
+
+        elif any(k in cat for k in ["salary", "wage", "staff"]):
+            drivers["wages"] += abs(amt)
+
+        elif any(k in cat for k in ["utility", "electric", "water"]):
+            drivers["utilities"] += abs(amt)
+
+    return drivers
 
 # -------------------------
-# UPLOAD
+# UPLOAD API
 # -------------------------
 @app.post("/api/upload")
 async def upload(file: UploadFile, doc_type: str = Form(...)):
@@ -86,6 +129,7 @@ async def upload(file: UploadFile, doc_type: str = Form(...)):
     rows_uploaded = len(df)
 
     df["fingerprint"] = df.apply(generate_hash, axis=1)
+
     records = df.to_dict(orient="records")
 
     with engine.begin() as conn:
@@ -120,104 +164,36 @@ async def upload(file: UploadFile, doc_type: str = Form(...)):
     return {"uploaded": rows_uploaded}
 
 # -------------------------
-# DASHBOARD 🔥 FULL ENGINE VERSION
+# DASHBOARD (FIXED ENGINE)
 # -------------------------
 @app.get("/api/dashboard")
 def dashboard():
     with engine.begin() as conn:
-
-        # -------------------------
-        # MONTHLY (KEEP EXISTING)
-        # -------------------------
         rows = conn.execute(text("""
-            SELECT
-                DATE_TRUNC('month', date) as month,
-                SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END) AS revenue,
-                SUM(CASE WHEN amount < 0 THEN ABS(amount) ELSE 0 END) AS expenses
+            SELECT category, amount
             FROM financial_data
-            WHERE doc_type = 'income_statement'
-            GROUP BY month
-            ORDER BY month
         """)).fetchall()
 
-        # -------------------------
-        # 🔥 CATEGORY TOTALS
-        # -------------------------
-        totals = conn.execute(text("""
-            SELECT category, SUM(amount) as total
-            FROM financial_data
-            WHERE doc_type = 'income_statement'
-            GROUP BY category
-        """)).fetchall()
+    mapped = [
+        {"category": r[0], "amount": r[1]}
+        for r in rows
+    ]
 
-    # -------------------------
-    # PROCESS MONTHLY (UNCHANGED)
-    # -------------------------
-    monthly = []
-    total_revenue = 0
-    total_expenses = 0
+    drivers = map_to_drivers(mapped)
 
-    for r in rows:
-        revenue = float(r[1] or 0)
-        expenses = float(r[2] or 0)
+    # 🔥 CORE ENGINE
+    kpis = compute_kpis(drivers)
 
-        monthly.append({
-            "month": str(r[0]),
-            "revenue": revenue,
-            "expenses": expenses,
-            "profit": revenue - expenses
-        })
-
-        total_revenue += revenue
-        total_expenses += expenses
-
-    # -------------------------
-    # 🔥 CLASSIFY INTO DRIVERS
-    # -------------------------
-    revenue = 0
-    cogs = 0
-    opex = 0
-
-    for row in totals:
-        category = row[0] or ""
-        amount = float(row[1] or 0)
-
-        bucket = classify_category(category)
-
-        if bucket == "revenue":
-            revenue += amount
-        elif bucket == "cogs":
-            cogs += abs(amount)
-        elif bucket == "opex":
-            opex += abs(amount)
-
-    # -------------------------
-    # 🔥 ENGINE INPUT MAPPING
-    # -------------------------
-    units = 1
-    price = revenue if revenue else 0
-
-    raw_data = {
-        "units": units,
-        "price": price,
-        "variable_costs": cogs,
-        "fixed_costs": opex,
-        "pos": revenue,
-        "supplier_payments": cogs,
-    }
-
-    # -------------------------
-    # 🔥 RUN ENGINE
-    # -------------------------
-    result = run_engine(raw_data)
-
-    # -------------------------
-    # RESPONSE
-    # -------------------------
     return {
-        "summary": result["kpis"],   # ✅ KPI cards now engine-driven
-        "monthly": monthly,          # unchanged
-        "graph": result["graph"],    # future BAS UI
+        "summary": {
+            "revenue": kpis.get("revenue", 0),
+            "expenses": kpis.get("operating_expenses", 0),
+            "net_profit": kpis.get("net_profit", 0),
+            "gross_margin": (
+                kpis.get("gross_margin", 0) / kpis.get("revenue", 1)
+            )
+        },
+        "graph": kpis
     }
 
 # -------------------------
