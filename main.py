@@ -17,7 +17,7 @@ app = FastAPI()
 # -------------------------
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # tighten later
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -59,13 +59,13 @@ def generate_hash(row):
     return hashlib.sha256(raw.encode()).hexdigest()
 
 # -------------------------
-# REQUEST MODEL (SIMULATION)
+# REQUEST MODEL
 # -------------------------
 class SimulationInput(BaseModel):
     overrides: Optional[Dict[str, float]] = None
 
 # -------------------------
-# ROOT (health check)
+# ROOT
 # -------------------------
 @app.get("/")
 def root():
@@ -82,7 +82,6 @@ async def upload(file: UploadFile, doc_type: str = Form(...)):
         df = df.replace(r'^\s*$', None, regex=True)
         df = df.dropna(how="all")
 
-        # Required columns check
         required_cols = {"Date", "Amount", "Category", "Description"}
         if not required_cols.issubset(df.columns):
             raise HTTPException(
@@ -142,16 +141,29 @@ async def upload(file: UploadFile, doc_type: str = Form(...)):
         raise HTTPException(status_code=500, detail=str(e))
 
 # -------------------------
-# DASHBOARD API
+# DASHBOARD API (FIXED 🔥)
 # -------------------------
 @app.get("/api/dashboard")
 def dashboard():
     try:
         with engine.begin() as conn:
+
+            # --- GRAPH DATA ---
             rows = conn.execute(text("""
                 SELECT category, amount
                 FROM financial_data
                 WHERE doc_type = 'income_statement'
+            """)).fetchall()
+
+            # --- MONTHLY DATA (NEW FIX) ---
+            monthly_rows = conn.execute(text("""
+                SELECT 
+                    DATE_TRUNC('month', date) as month,
+                    SUM(amount) as total
+                FROM financial_data
+                WHERE doc_type = 'income_statement'
+                GROUP BY month
+                ORDER BY month
             """)).fetchall()
 
         if not rows:
@@ -167,6 +179,15 @@ def dashboard():
 
         kpis = result.get("kpis", {})
 
+        # --- FORMAT MONTHLY ---
+        monthly_data = [
+            {
+                "month": str(r[0]),
+                "value": float(r[1])
+            }
+            for r in monthly_rows
+        ]
+
         return {
             "summary": {
                 "revenue": kpis.get("revenue", 0),
@@ -178,7 +199,7 @@ def dashboard():
                 )
             },
             "graph": result.get("graph", {}),
-            "monthly": []
+            "monthly": monthly_data   # ✅ FIXED
         }
 
     except Exception as e:
