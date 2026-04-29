@@ -7,6 +7,10 @@ import UploadPanel from "@/components/UploadPanel";
 import FileTable from "@/components/FileTable";
 import CoverageTracker from "@/components/CoverageTracker";
 import MonthlyChart from "@/components/MonthlyChart";
+
+// 🔥 NEW
+import BASGraph from "@/components/BASGraph";
+
 import { getDashboard, getFiles, getCoverage } from "@/lib/api";
 
 export default function Home() {
@@ -15,7 +19,6 @@ export default function Home() {
   const [coverage, setCoverage] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // ✅ moved out so it can be reused
   async function load() {
     try {
       const dashboard = await getDashboard();
@@ -45,7 +48,6 @@ export default function Home() {
         <Navbar />
         <div className="p-6">
           <h2>No data yet</h2>
-          {/* ✅ added callback */}
           <UploadPanel onUploadSuccess={load} />
         </div>
       </div>
@@ -55,13 +57,27 @@ export default function Home() {
   return (
     <div>
       <Navbar />
+
       <div className="p-6 space-y-6">
+
+        {/* ✅ KPI CARDS */}
         <KPICards data={data.summary} />
+
+        {/* 🔥 NEW: BUSINESS FLOW (BAS) */}
+        <BASGraph data={data.graph} />
+
+        {/* 📊 CHART */}
         <MonthlyChart data={data.monthly} />
-        {/* ✅ added callback */}
+
+        {/* 📤 UPLOAD */}
         <UploadPanel onUploadSuccess={load} />
+
+        {/* 📁 FILES */}
         <FileTable files={files} />
+
+        {/* 📈 COVERAGE */}
         <CoverageTracker data={coverage} />
+
       </div>
     </div>
   );

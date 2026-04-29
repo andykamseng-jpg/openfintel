@@ -4,6 +4,9 @@ import pandas as pd
 from sqlalchemy import create_engine, text
 import os, unicodedata, hashlib
 
+# 🔥 ENGINE
+from engine.adapter import run_engine
+
 app = FastAPI()
 
 app.add_middleware(
@@ -42,6 +45,23 @@ def generate_hash(row):
     return hashlib.sha256(raw.encode()).hexdigest()
 
 # -------------------------
+# CATEGORY CLASSIFIER 🔥
+# -------------------------
+def classify_category(cat: str):
+    cat = (cat or "").lower()
+
+    if any(k in cat for k in ["sales", "revenue", "income"]):
+        return "revenue"
+
+    if any(k in cat for k in ["ingredient", "inventory", "material", "cost of goods"]):
+        return "cogs"
+
+    if any(k in cat for k in ["rent", "wage", "salary", "utility", "expense"]):
+        return "opex"
+
+    return "other"
+
+# -------------------------
 # UPLOAD
 # -------------------------
 @app.post("/api/upload")
@@ -66,7 +86,6 @@ async def upload(file: UploadFile, doc_type: str = Form(...)):
     rows_uploaded = len(df)
 
     df["fingerprint"] = df.apply(generate_hash, axis=1)
-
     records = df.to_dict(orient="records")
 
     with engine.begin() as conn:
@@ -101,11 +120,15 @@ async def upload(file: UploadFile, doc_type: str = Form(...)):
     return {"uploaded": rows_uploaded}
 
 # -------------------------
-# DASHBOARD
+# DASHBOARD 🔥 FULL ENGINE VERSION
 # -------------------------
 @app.get("/api/dashboard")
 def dashboard():
     with engine.begin() as conn:
+
+        # -------------------------
+        # MONTHLY (KEEP EXISTING)
+        # -------------------------
         rows = conn.execute(text("""
             SELECT
                 DATE_TRUNC('month', date) as month,
@@ -117,6 +140,19 @@ def dashboard():
             ORDER BY month
         """)).fetchall()
 
+        # -------------------------
+        # 🔥 CATEGORY TOTALS
+        # -------------------------
+        totals = conn.execute(text("""
+            SELECT category, SUM(amount) as total
+            FROM financial_data
+            WHERE doc_type = 'income_statement'
+            GROUP BY category
+        """)).fetchall()
+
+    # -------------------------
+    # PROCESS MONTHLY (UNCHANGED)
+    # -------------------------
     monthly = []
     total_revenue = 0
     total_expenses = 0
@@ -135,14 +171,53 @@ def dashboard():
         total_revenue += revenue
         total_expenses += expenses
 
+    # -------------------------
+    # 🔥 CLASSIFY INTO DRIVERS
+    # -------------------------
+    revenue = 0
+    cogs = 0
+    opex = 0
+
+    for row in totals:
+        category = row[0] or ""
+        amount = float(row[1] or 0)
+
+        bucket = classify_category(category)
+
+        if bucket == "revenue":
+            revenue += amount
+        elif bucket == "cogs":
+            cogs += abs(amount)
+        elif bucket == "opex":
+            opex += abs(amount)
+
+    # -------------------------
+    # 🔥 ENGINE INPUT MAPPING
+    # -------------------------
+    units = 1
+    price = revenue if revenue else 0
+
+    raw_data = {
+        "units": units,
+        "price": price,
+        "variable_costs": cogs,
+        "fixed_costs": opex,
+        "pos": revenue,
+        "supplier_payments": cogs,
+    }
+
+    # -------------------------
+    # 🔥 RUN ENGINE
+    # -------------------------
+    result = run_engine(raw_data)
+
+    # -------------------------
+    # RESPONSE
+    # -------------------------
     return {
-        "summary": {
-            "revenue": total_revenue,
-            "expenses": total_expenses,
-            "net_profit": total_revenue - total_expenses,
-            "gross_margin": (total_revenue - total_expenses) / total_revenue if total_revenue else 0
-        },
-        "monthly": monthly
+        "summary": result["kpis"],   # ✅ KPI cards now engine-driven
+        "monthly": monthly,          # unchanged
+        "graph": result["graph"],    # future BAS UI
     }
 
 # -------------------------
