@@ -1,23 +1,16 @@
 const BASE_URL = "https://openfintel.onrender.com";
 
-async function fetchAPI(endpoint: string) {
-  try {
-    const res = await fetch(`${BASE_URL}${endpoint}`, {
-      cache: "no-store",
-    });
-
-    if (!res.ok) {
-      console.error("API error:", res.status);
-      return null;
-    }
-
-    return await res.json();
-  } catch (err) {
-    console.error("Fetch failed:", err);
-    return null;
-  }
+export async function getDashboard() {
+  const res = await fetch(`${BASE_URL}/api/dashboard`);
+  return res.json();
 }
 
-export const getDashboard = () => fetchAPI("/api/dashboard");
-export const getFiles = () => fetchAPI("/api/files");
-export const getCoverage = () => fetchAPI("/api/coverage");
+export async function getFiles() {
+  const res = await fetch(`${BASE_URL}/api/files`);
+  return res.json();
+}
+
+export async function getCoverage() {
+  const res = await fetch(`${BASE_URL}/api/coverage`);
+  return res.json();
+}

@@ -1,10 +1,11 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useState, useRef } from "react";
 
 export default function UploadPanel({ onUploadSuccess }: any) {
-  const fileRef = useRef<HTMLInputElement | null>(null);
   const [loading, setLoading] = useState(false);
+  const [fileName, setFileName] = useState("");
+  const fileRef = useRef<HTMLInputElement>(null);
 
   async function handleUpload() {
     const file = fileRef.current?.files?.[0];
@@ -21,10 +22,13 @@ export default function UploadPanel({ onUploadSuccess }: any) {
     formData.append("doc_type", "income_statement");
 
     try {
-      const res = await fetch("https://openfintel.onrender.com/api/upload", {
-        method: "POST",
-        body: formData,
-      });
+      const res = await fetch(
+        "https://openfintel.onrender.com/api/upload",
+        {
+          method: "POST",
+          body: formData,
+        }
+      );
 
       const data = await res.json();
 
@@ -32,15 +36,21 @@ export default function UploadPanel({ onUploadSuccess }: any) {
         throw new Error(data.detail || "Upload failed");
       }
 
-      alert(`Uploaded: ${data.uploaded} rows`);
+      alert("Upload successful");
 
-      // reset file
-      if (fileRef.current) fileRef.current.value = "";
+      // reset input
+      if (fileRef.current) {
+        fileRef.current.value = "";
+      }
 
-      if (onUploadSuccess) onUploadSuccess();
+      setFileName("");
+
+      if (onUploadSuccess) {
+        onUploadSuccess();
+      }
 
     } catch (err: any) {
-      console.error(err);
+      console.error("UPLOAD ERROR:", err);
       alert(err.message || "Upload failed");
     } finally {
       setLoading(false);
@@ -48,38 +58,31 @@ export default function UploadPanel({ onUploadSuccess }: any) {
   }
 
   return (
-    <div
-      style={{
-        position: "relative",
-        zIndex: 9999,
-        background: "white",
-        padding: "16px",
-        borderRadius: "12px",
-      }}
-    >
+    <div className="border p-4 rounded space-y-3">
+
       <input
         type="file"
         ref={fileRef}
-        style={{
-          display: "block",
-          marginBottom: "10px",
-          position: "relative",
-          zIndex: 9999,
-        }}
+        onChange={(e) =>
+          setFileName(e.target.files?.[0]?.name || "")
+        }
+        className="block"
       />
+
+      {fileName && (
+        <p className="text-sm text-gray-600">
+          Selected: {fileName}
+        </p>
+      )}
 
       <button
         onClick={handleUpload}
         disabled={loading}
-        style={{
-          padding: "8px 16px",
-          background: "#2563eb",
-          color: "white",
-          borderRadius: "8px",
-        }}
+        className="px-4 py-2 bg-blue-600 text-white rounded"
       >
         {loading ? "Uploading..." : "Upload"}
       </button>
+
     </div>
   );
 }

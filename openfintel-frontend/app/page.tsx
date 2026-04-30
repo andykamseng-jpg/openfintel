@@ -7,8 +7,6 @@ import UploadPanel from "@/components/UploadPanel";
 import FileTable from "@/components/FileTable";
 import CoverageTracker from "@/components/CoverageTracker";
 import MonthlyChart from "@/components/MonthlyChart";
-
-// 🔥 NEW
 import BASGraph from "@/components/BASGraph";
 
 import { getDashboard, getFiles, getCoverage } from "@/lib/api";
@@ -60,22 +58,16 @@ export default function Home() {
 
       <div className="p-6 space-y-6">
 
-        {/* ✅ KPI CARDS */}
         <KPICards data={data.summary} />
 
-        {/* 🔥 NEW: BUSINESS FLOW (BAS) */}
         <BASGraph data={data.graph} />
 
-        {/* 📊 CHART */}
         <MonthlyChart data={data.monthly} />
 
-        {/* 📤 UPLOAD */}
         <UploadPanel onUploadSuccess={load} />
 
-        {/* 📁 FILES */}
         <FileTable files={files} />
 
-        {/* 📈 COVERAGE */}
         <CoverageTracker data={coverage} />
 
       </div>
