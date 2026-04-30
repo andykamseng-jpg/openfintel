@@ -14,7 +14,7 @@ export default function CoverageTracker({ data }: { data: any[] }) {
 
       {data.map((c, i) => (
         <div key={i} className="text-sm">
-          {c.doc_type}: {c.days} days tracked
+          {c.doc_type}: {c.records} records
         </div>
       ))}
     </div>

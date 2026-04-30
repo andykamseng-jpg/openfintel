@@ -13,11 +13,11 @@ from engine.mapper import map_db_to_engine
 app = FastAPI()
 
 # -------------------------
-# CORS
+# CORS (FIXED)
 # -------------------------
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # you can later restrict to your domain
+    allow_origins=["https://www.openfintel.com"],  # ✅ FIXED (was "*")
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -107,11 +107,14 @@ async def upload(file: UploadFile, doc_type: str = Form(...)):
         records = df.to_dict(orient="records")
 
         with engine.begin() as conn:
-            conn.execute(text("""
+
+            # ✅ FIXED: get actual inserted rows (not uploaded)
+            result = conn.execute(text("""
                 INSERT INTO financial_data
                 (date, description, category, amount, doc_type, fingerprint)
                 VALUES (:Date, :Description, :Category, :Amount, :doc_type, :fingerprint)
                 ON CONFLICT (fingerprint) DO NOTHING
+                RETURNING 1
             """), [
                 {
                     "Date": r["Date"],
@@ -124,6 +127,8 @@ async def upload(file: UploadFile, doc_type: str = Form(...)):
                 for r in records
             ])
 
+            rows_inserted = len(result.fetchall())  # ✅ FIXED
+
             conn.execute(text("""
                 INSERT INTO upload_logs (filename, doc_type, rows_uploaded, rows_inserted)
                 VALUES (:f, :d, :u, :i)
@@ -131,10 +136,13 @@ async def upload(file: UploadFile, doc_type: str = Form(...)):
                 "f": file.filename,
                 "d": doc_type,
                 "u": rows_uploaded,
-                "i": rows_uploaded
+                "i": rows_inserted  # ✅ FIXED
             })
 
-        return {"uploaded": rows_uploaded}
+        return {
+            "uploaded": rows_uploaded,
+            "inserted": rows_inserted
+        }
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -209,52 +217,6 @@ def dashboard():
             },
             "graph": result.get("graph", {}),
             "monthly": monthly_data
-        }
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-# -------------------------
-# SIMULATION API
-# -------------------------
-@app.post("/api/simulate")
-def simulate(data: SimulationInput):
-    try:
-        with engine.begin() as conn:
-            rows = conn.execute(text("""
-                SELECT category, amount
-                FROM financial_data
-                WHERE doc_type = 'income_statement'
-            """)).fetchall()
-
-        if not rows:
-            return {"summary": {}, "graph": {}}
-
-        mapped_rows = [
-            {"category": str(r[0] or ""), "amount": float(r[1] or 0)}
-            for r in rows
-        ]
-
-        drivers = map_db_to_engine(mapped_rows)
-
-        result = run_engine(
-            drivers,
-            overrides=data.overrides or {}
-        )
-
-        kpis = result.get("kpis", {})
-
-        return {
-            "summary": {
-                "revenue": kpis.get("revenue", 0),
-                "expenses": kpis.get("operating_expenses", 0),
-                "net_profit": kpis.get("net_profit", 0),
-                "gross_margin": (
-                    kpis.get("gross_margin", 0) / kpis.get("revenue", 1)
-                    if kpis.get("revenue", 0) else 0
-                )
-            },
-            "graph": result.get("graph", {})
         }
 
     except Exception as e:

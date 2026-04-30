@@ -19,7 +19,7 @@ export default function UploadPanel({ onUploadSuccess }: any) {
 
     try {
       const res = await fetch(
-        "https://openfintel.onrender.com/api/upload",
+        `${process.env.NEXT_PUBLIC_API_URL}/api/upload`,
         {
           method: "POST",
           body: formData,
@@ -47,7 +47,6 @@ export default function UploadPanel({ onUploadSuccess }: any) {
   return (
     <div className="border p-4 rounded">
 
-      {/* hidden input */}
       <input
         type="file"
         ref={fileRef}

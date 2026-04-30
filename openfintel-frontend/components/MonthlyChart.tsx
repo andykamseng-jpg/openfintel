@@ -22,11 +22,11 @@ export default function MonthlyChart({ data }: { data: any[] }) {
   }
 
   const formatted = data.map((d) => ({
-    ...d,
-    month: new Date(d.month).toLocaleString("default", {
-      month: "short",
-    }),
-  }));
+  ...d,
+  month: new Date(d.month + "-01").toLocaleString("default", {
+    month: "short",
+  }),
+}));
 
   return (
     <div className="bg-white p-4 rounded-2xl shadow">
