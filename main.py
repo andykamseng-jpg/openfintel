@@ -140,7 +140,7 @@ async def upload(file: UploadFile, doc_type: str = Form(...)):
         raise HTTPException(status_code=500, detail=str(e))
 
 # -------------------------
-# DASHBOARD API (FIXED)
+# DASHBOARD API (FINAL FIX)
 # -------------------------
 @app.get("/api/dashboard")
 def dashboard():
@@ -154,7 +154,7 @@ def dashboard():
                 WHERE doc_type = 'income_statement'
             """)).fetchall()
 
-            # ✅ FIXED MONTHLY QUERY
+            # ✅ FINAL FIXED MONTHLY QUERY
             monthly_rows = conn.execute(text("""
                 SELECT 
                     DATE_TRUNC('month', date) as month,
@@ -189,7 +189,7 @@ def dashboard():
 
         kpis = result.get("kpis", {})
 
-        # ✅ FIXED MONTHLY FORMAT
+        # ✅ FINAL FIXED FORMAT
         monthly_data = [
             {
                 "month": r[0].strftime("%Y-%m"),
@@ -212,52 +212,6 @@ def dashboard():
             },
             "graph": result.get("graph", {}),
             "monthly": monthly_data
-        }
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-# -------------------------
-# SIMULATION API
-# -------------------------
-@app.post("/api/simulate")
-def simulate(data: SimulationInput):
-    try:
-        with engine.begin() as conn:
-            rows = conn.execute(text("""
-                SELECT category, amount
-                FROM financial_data
-                WHERE doc_type = 'income_statement'
-            """)).fetchall()
-
-        if not rows:
-            return {"summary": {}, "graph": {}}
-
-        mapped_rows = [
-            {"category": str(r[0] or ""), "amount": float(r[1] or 0)}
-            for r in rows
-        ]
-
-        drivers = map_db_to_engine(mapped_rows)
-
-        result = run_engine(
-            drivers,
-            overrides=data.overrides or {}
-        )
-
-        kpis = result.get("kpis", {})
-
-        return {
-            "summary": {
-                "revenue": kpis.get("revenue", 0),
-                "expenses": kpis.get("operating_expenses", 0),
-                "net_profit": kpis.get("net_profit", 0),
-                "gross_margin": (
-                    kpis.get("gross_margin", 0) / kpis.get("revenue", 1)
-                    if kpis.get("revenue", 0) else 0
-                )
-            },
-            "graph": result.get("graph", {})
         }
 
     except Exception as e:
