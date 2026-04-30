@@ -7,29 +7,37 @@ export default function UploadPanel({ onUploadSuccess }: any) {
   const [loading, setLoading] = useState(false);
 
   async function handleUpload() {
-    if (!file) return;
+    if (!file) {
+      alert("Please select a file");
+      return;
+    }
 
     setLoading(true);
 
     const formData = new FormData();
     formData.append("file", file);
-
-    // ✅ REQUIRED FIX
     formData.append("doc_type", "income_statement");
 
     try {
-      await fetch("https://openfintel.onrender.com/api/upload", {
+      const res = await fetch("https://openfintel.onrender.com/api/upload", {
         method: "POST",
         body: formData,
       });
 
-      alert("Upload successful");
+      const data = await res.json();
+
+      // ✅ IMPORTANT: check response
+      if (!res.ok) {
+        throw new Error(data.detail || "Upload failed");
+      }
+
+      alert(`Upload successful: ${data.uploaded} rows`);
 
       if (onUploadSuccess) onUploadSuccess();
 
-    } catch (err) {
-      console.error(err);
-      alert("Upload failed");
+    } catch (err: any) {
+      console.error("UPLOAD ERROR:", err);
+      alert(err.message || "Upload failed");
     } finally {
       setLoading(false);
     }
@@ -41,6 +49,7 @@ export default function UploadPanel({ onUploadSuccess }: any) {
         type="file"
         onChange={(e) => setFile(e.target.files?.[0] || null)}
       />
+
       <button
         onClick={handleUpload}
         disabled={loading}
