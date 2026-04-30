@@ -14,6 +14,9 @@ export default function UploadPanel({ onUploadSuccess }: any) {
     const formData = new FormData();
     formData.append("file", file);
 
+    // ✅ REQUIRED FIX
+    formData.append("doc_type", "income_statement");
+
     try {
       await fetch("https://openfintel.onrender.com/api/upload", {
         method: "POST",
@@ -22,7 +25,6 @@ export default function UploadPanel({ onUploadSuccess }: any) {
 
       alert("Upload successful");
 
-      // ✅ ONLY important addition
       if (onUploadSuccess) onUploadSuccess();
 
     } catch (err) {

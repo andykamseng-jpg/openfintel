@@ -107,7 +107,6 @@ async def upload(file: UploadFile, doc_type: str = Form(...)):
         records = df.to_dict(orient="records")
 
         with engine.begin() as conn:
-
             conn.execute(text("""
                 INSERT INTO financial_data
                 (date, description, category, amount, doc_type, fingerprint)
@@ -141,25 +140,35 @@ async def upload(file: UploadFile, doc_type: str = Form(...)):
         raise HTTPException(status_code=500, detail=str(e))
 
 # -------------------------
-# DASHBOARD API
+# DASHBOARD API (FIXED)
 # -------------------------
 @app.get("/api/dashboard")
 def dashboard():
     try:
         with engine.begin() as conn:
 
-            # Graph data
+            # KPI base data
             rows = conn.execute(text("""
                 SELECT category, amount
                 FROM financial_data
                 WHERE doc_type = 'income_statement'
             """)).fetchall()
 
-            # Monthly data (FIXED)
+            # ✅ FIXED MONTHLY QUERY
             monthly_rows = conn.execute(text("""
                 SELECT 
                     DATE_TRUNC('month', date) as month,
-                    SUM(amount) as total
+
+                    SUM(CASE 
+                        WHEN amount > 0 THEN amount 
+                        ELSE 0 
+                    END) as revenue,
+
+                    SUM(CASE 
+                        WHEN amount < 0 THEN ABS(amount) 
+                        ELSE 0 
+                    END) as expenses
+
                 FROM financial_data
                 WHERE doc_type = 'income_statement'
                 AND date IS NOT NULL
@@ -180,11 +189,13 @@ def dashboard():
 
         kpis = result.get("kpis", {})
 
-        # Format monthly properly
+        # ✅ FIXED MONTHLY FORMAT
         monthly_data = [
             {
                 "month": r[0].strftime("%Y-%m"),
-                "value": float(r[1])
+                "revenue": float(r[1] or 0),
+                "expenses": float(r[2] or 0),
+                "profit": float((r[1] or 0) - (r[2] or 0))
             }
             for r in monthly_rows if r[0] is not None
         ]
@@ -251,47 +262,3 @@ def simulate(data: SimulationInput):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
-# -------------------------
-# FILES API
-# -------------------------
-@app.get("/api/files")
-def get_files():
-    with engine.begin() as conn:
-        rows = conn.execute(text("""
-            SELECT filename, doc_type, rows_uploaded, rows_inserted, created_at
-            FROM upload_logs
-            ORDER BY created_at DESC
-        """)).fetchall()
-
-    return {
-        "data": [
-            {
-                "filename": r[0],
-                "doc_type": r[1],
-                "rows_uploaded": r[2],
-                "rows_inserted": r[3],
-                "created_at": str(r[4])
-            }
-            for r in rows
-        ]
-    }
-
-# -------------------------
-# COVERAGE API
-# -------------------------
-@app.get("/api/coverage")
-def get_coverage():
-    with engine.begin() as conn:
-        rows = conn.execute(text("""
-            SELECT doc_type, COUNT(*) as count
-            FROM financial_data
-            GROUP BY doc_type
-        """)).fetchall()
-
-    return {
-        "data": [
-            {"doc_type": r[0], "records": r[1]}
-            for r in rows
-        ]
-    }
