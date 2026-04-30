@@ -1,12 +1,14 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 export default function UploadPanel({ onUploadSuccess }: any) {
-  const [file, setFile] = useState<File | null>(null);
+  const fileRef = useRef<HTMLInputElement | null>(null);
   const [loading, setLoading] = useState(false);
 
   async function handleUpload() {
+    const file = fileRef.current?.files?.[0];
+
     if (!file) {
       alert("Please select a file");
       return;
@@ -26,12 +28,14 @@ export default function UploadPanel({ onUploadSuccess }: any) {
 
       const data = await res.json();
 
-      // ✅ IMPORTANT: check response
       if (!res.ok) {
         throw new Error(data.detail || "Upload failed");
       }
 
       alert(`Upload successful: ${data.uploaded} rows`);
+
+      // reset input
+      if (fileRef.current) fileRef.current.value = "";
 
       if (onUploadSuccess) onUploadSuccess();
 
@@ -45,10 +49,7 @@ export default function UploadPanel({ onUploadSuccess }: any) {
 
   return (
     <div className="border p-4 rounded">
-      <input
-        type="file"
-        onChange={(e) => setFile(e.target.files?.[0] || null)}
-      />
+      <input type="file" ref={fileRef} />
 
       <button
         onClick={handleUpload}
