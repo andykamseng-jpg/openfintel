@@ -17,7 +17,7 @@ app = FastAPI()
 # -------------------------
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],  # you can later restrict to your domain
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -140,21 +140,19 @@ async def upload(file: UploadFile, doc_type: str = Form(...)):
         raise HTTPException(status_code=500, detail=str(e))
 
 # -------------------------
-# DASHBOARD API (FINAL FIX)
+# DASHBOARD API
 # -------------------------
 @app.get("/api/dashboard")
 def dashboard():
     try:
         with engine.begin() as conn:
 
-            # KPI base data
             rows = conn.execute(text("""
                 SELECT category, amount
                 FROM financial_data
                 WHERE doc_type = 'income_statement'
             """)).fetchall()
 
-            # ✅ FINAL FIXED MONTHLY QUERY
             monthly_rows = conn.execute(text("""
                 SELECT 
                     DATE_TRUNC('month', date) as month,
@@ -189,7 +187,6 @@ def dashboard():
 
         kpis = result.get("kpis", {})
 
-        # ✅ FINAL FIXED FORMAT
         monthly_data = [
             {
                 "month": r[0].strftime("%Y-%m"),
@@ -216,3 +213,93 @@ def dashboard():
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+# -------------------------
+# SIMULATION API
+# -------------------------
+@app.post("/api/simulate")
+def simulate(data: SimulationInput):
+    try:
+        with engine.begin() as conn:
+            rows = conn.execute(text("""
+                SELECT category, amount
+                FROM financial_data
+                WHERE doc_type = 'income_statement'
+            """)).fetchall()
+
+        if not rows:
+            return {"summary": {}, "graph": {}}
+
+        mapped_rows = [
+            {"category": str(r[0] or ""), "amount": float(r[1] or 0)}
+            for r in rows
+        ]
+
+        drivers = map_db_to_engine(mapped_rows)
+
+        result = run_engine(
+            drivers,
+            overrides=data.overrides or {}
+        )
+
+        kpis = result.get("kpis", {})
+
+        return {
+            "summary": {
+                "revenue": kpis.get("revenue", 0),
+                "expenses": kpis.get("operating_expenses", 0),
+                "net_profit": kpis.get("net_profit", 0),
+                "gross_margin": (
+                    kpis.get("gross_margin", 0) / kpis.get("revenue", 1)
+                    if kpis.get("revenue", 0) else 0
+                )
+            },
+            "graph": result.get("graph", {})
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# -------------------------
+# FILES API
+# -------------------------
+@app.get("/api/files")
+def get_files():
+    with engine.begin() as conn:
+        rows = conn.execute(text("""
+            SELECT filename, doc_type, rows_uploaded, rows_inserted, created_at
+            FROM upload_logs
+            ORDER BY created_at DESC
+        """)).fetchall()
+
+    return {
+        "data": [
+            {
+                "filename": r[0],
+                "doc_type": r[1],
+                "rows_uploaded": r[2],
+                "rows_inserted": r[3],
+                "created_at": str(r[4])
+            }
+            for r in rows
+        ]
+    }
+
+# -------------------------
+# COVERAGE API
+# -------------------------
+@app.get("/api/coverage")
+def get_coverage():
+    with engine.begin() as conn:
+        rows = conn.execute(text("""
+            SELECT doc_type, COUNT(*) as count
+            FROM financial_data
+            GROUP BY doc_type
+        """)).fetchall()
+
+    return {
+        "data": [
+            {"doc_type": r[0], "records": r[1]}
+            for r in rows
+        ]
+    }
