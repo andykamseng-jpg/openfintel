@@ -32,15 +32,15 @@ export default function UploadPanel({ onUploadSuccess }: any) {
         throw new Error(data.detail || "Upload failed");
       }
 
-      alert(`Upload successful: ${data.uploaded} rows`);
+      alert(`Uploaded: ${data.uploaded} rows`);
 
-      // reset input
+      // reset file
       if (fileRef.current) fileRef.current.value = "";
 
       if (onUploadSuccess) onUploadSuccess();
 
     } catch (err: any) {
-      console.error("UPLOAD ERROR:", err);
+      console.error(err);
       alert(err.message || "Upload failed");
     } finally {
       setLoading(false);
@@ -48,13 +48,35 @@ export default function UploadPanel({ onUploadSuccess }: any) {
   }
 
   return (
-    <div className="border p-4 rounded">
-      <input type="file" ref={fileRef} />
+    <div
+      style={{
+        position: "relative",
+        zIndex: 9999,
+        background: "white",
+        padding: "16px",
+        borderRadius: "12px",
+      }}
+    >
+      <input
+        type="file"
+        ref={fileRef}
+        style={{
+          display: "block",
+          marginBottom: "10px",
+          position: "relative",
+          zIndex: 9999,
+        }}
+      />
 
       <button
         onClick={handleUpload}
         disabled={loading}
-        className="ml-2 px-4 py-2 bg-blue-500 text-white rounded"
+        style={{
+          padding: "8px 16px",
+          background: "#2563eb",
+          color: "white",
+          borderRadius: "8px",
+        }}
       >
         {loading ? "Uploading..." : "Upload"}
       </button>
