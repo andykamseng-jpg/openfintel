@@ -1,20 +1,16 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useRef, useState } from "react";
 
 export default function UploadPanel({ onUploadSuccess }: any) {
-  const [loading, setLoading] = useState(false);
-  const [fileName, setFileName] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
+  const [loading, setLoading] = useState(false);
 
-  async function handleUpload() {
-    const file = fileRef.current?.files?.[0];
+  function openFilePicker() {
+    fileRef.current?.click();
+  }
 
-    if (!file) {
-      alert("Please select a file");
-      return;
-    }
-
+  async function handleUpload(file: File) {
     setLoading(true);
 
     const formData = new FormData();
@@ -38,19 +34,10 @@ export default function UploadPanel({ onUploadSuccess }: any) {
 
       alert("Upload successful");
 
-      // reset input
-      if (fileRef.current) {
-        fileRef.current.value = "";
-      }
-
-      setFileName("");
-
-      if (onUploadSuccess) {
-        onUploadSuccess();
-      }
+      if (onUploadSuccess) onUploadSuccess();
 
     } catch (err: any) {
-      console.error("UPLOAD ERROR:", err);
+      console.error(err);
       alert(err.message || "Upload failed");
     } finally {
       setLoading(false);
@@ -58,29 +45,25 @@ export default function UploadPanel({ onUploadSuccess }: any) {
   }
 
   return (
-    <div className="border p-4 rounded space-y-3">
+    <div className="border p-4 rounded">
 
+      {/* hidden input */}
       <input
         type="file"
         ref={fileRef}
-        onChange={(e) =>
-          setFileName(e.target.files?.[0]?.name || "")
-        }
-        className="block"
+        style={{ display: "none" }}
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          if (file) handleUpload(file);
+        }}
       />
 
-      {fileName && (
-        <p className="text-sm text-gray-600">
-          Selected: {fileName}
-        </p>
-      )}
-
       <button
-        onClick={handleUpload}
+        onClick={openFilePicker}
         disabled={loading}
         className="px-4 py-2 bg-blue-600 text-white rounded"
       >
-        {loading ? "Uploading..." : "Upload"}
+        {loading ? "Uploading..." : "Upload File"}
       </button>
 
     </div>
