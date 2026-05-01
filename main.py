@@ -204,7 +204,9 @@ def detect_file_type(df, filename, requested_type=None):
         "income_statement" in name
         or "profit_loss" in name
         or "p_l" in name
+        or "expense" in name
         or "revenue" in sample
+        or "expense" in sample
         or "gross profit" in sample
         or "net profit" in sample
     ):
@@ -313,6 +315,31 @@ def is_revenue_line(line_item, category=None):
         any(term in text_value for term in revenue_terms)
         and not any(term in text_value for term in excluded_terms)
     )
+
+
+def is_income_statement_line(line_item, category=None):
+    text_value = f"{clean_text(line_item)} {clean_text(category)}"
+    income_statement_terms = (
+        "revenue",
+        "sales",
+        "turnover",
+        "service fees",
+        "service revenue",
+        "expense",
+        "expenses",
+        "cost",
+        "cogs",
+        "wages",
+        "salary",
+        "rent",
+        "utilities",
+        "insurance",
+        "tax",
+        "depreciation",
+        "amortisation",
+        "amortization",
+    )
+    return any(term in text_value for term in income_statement_terms)
 
 
 def insert_typed_rows(conn, upload_id, doc_type, df):
@@ -478,8 +505,8 @@ def insert_typed_rows(conn, upload_id, doc_type, df):
 
     if doc_type == "income_statement":
         nonzero_rows = [row for row in rows if row["amount"] != 0]
-        has_revenue = any(
-            is_revenue_line(row["line_item"], row.get("category"))
+        has_income_statement_lines = any(
+            is_income_statement_line(row["line_item"], row.get("category"))
             for row in nonzero_rows
         )
 
@@ -489,10 +516,10 @@ def insert_typed_rows(conn, upload_id, doc_type, df):
                 detail="Income statement upload has no numeric values to ingest",
             )
 
-        if not has_revenue:
+        if not has_income_statement_lines:
             raise HTTPException(
                 status_code=400,
-                detail="Income statement must include a revenue, sales, or turnover line",
+                detail="Income statement must include revenue, sales, turnover, expense, or cost lines",
             )
 
     if doc_type == "income_statement":
