@@ -288,6 +288,33 @@ def infer_balance_section(line_item):
     return None
 
 
+def is_revenue_line(line_item, category=None):
+    text_value = f"{clean_text(line_item)} {clean_text(category)}"
+    revenue_terms = (
+        "revenue",
+        "sales",
+        "turnover",
+        "service fees",
+        "service revenue",
+    )
+    excluded_terms = (
+        "cost of sales",
+        "cost of revenue",
+        "expense",
+        "expenses",
+        "tax",
+        "net income",
+        "net profit",
+        "gross profit",
+        "other income",
+        "interest income",
+    )
+    return (
+        any(term in text_value for term in revenue_terms)
+        and not any(term in text_value for term in excluded_terms)
+    )
+
+
 def insert_typed_rows(conn, upload_id, doc_type, df):
     amount_col = first_column(df, [
         "amount",
@@ -448,6 +475,25 @@ def insert_typed_rows(conn, upload_id, doc_type, df):
 
     if not rows:
         return 0
+
+    if doc_type == "income_statement":
+        nonzero_rows = [row for row in rows if row["amount"] != 0]
+        has_revenue = any(
+            is_revenue_line(row["line_item"], row.get("category"))
+            for row in nonzero_rows
+        )
+
+        if not nonzero_rows:
+            raise HTTPException(
+                status_code=400,
+                detail="Income statement upload has no numeric values to ingest",
+            )
+
+        if not has_revenue:
+            raise HTTPException(
+                status_code=400,
+                detail="Income statement must include a revenue, sales, or turnover line",
+            )
 
     if doc_type == "income_statement":
         conn.execute(text("""
