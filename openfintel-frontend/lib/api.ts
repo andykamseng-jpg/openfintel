@@ -23,3 +23,8 @@ export async function getCoverage() {
   const res = await fetch(`${API_BASE}/api/coverage`);
   return handle(res);
 }
+
+export async function getKpis() {
+  const res = await fetch(`${API_BASE}/api/kpis`);
+  return handle(res);
+}

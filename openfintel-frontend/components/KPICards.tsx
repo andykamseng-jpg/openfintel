@@ -1,19 +1,99 @@
-export default function KPICards({ data }: any) {
+"use client";
+
+import { useEffect, useState } from "react";
+import { getKpis } from "@/lib/api";
+
+type Kpis = {
+  cashPosition: number | null;
+  liquidityRatio: number | null;
+  debtRatio: number | null;
+  assetEfficiency: number | null;
+  burnRate: number | null;
+  workingCapital: number | null;
+};
+
+const EMPTY_KPIS: Kpis = {
+  cashPosition: null,
+  liquidityRatio: null,
+  debtRatio: null,
+  assetEfficiency: null,
+  burnRate: null,
+  workingCapital: null,
+};
+
+function hasValue(value: number | null | undefined): value is number {
+  return value !== null && value !== undefined && Number.isFinite(value);
+}
+
+function currency(value: number | null) {
+  if (!hasValue(value)) return "-";
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: 0,
+  }).format(value);
+}
+
+function percent(value: number | null) {
+  if (!hasValue(value)) return "-";
+  return `${Math.round(value * 100)}%`;
+}
+
+function ratio(value: number | null) {
+  if (!hasValue(value)) return "-";
+  return value.toFixed(2);
+}
+
+function multiple(value: number | null) {
+  if (!hasValue(value)) return "-";
+  return `${value.toFixed(2)}x`;
+}
+
+function monthlyCurrency(value: number | null) {
+  if (!hasValue(value)) return "-";
+  return `${currency(value)}/month`;
+}
+
+export default function KPICards({ refreshKey = 0 }: { refreshKey?: number }) {
+  const [data, setData] = useState<Kpis>(EMPTY_KPIS);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadKpis() {
+      try {
+        const result = await getKpis();
+        if (!cancelled) setData({ ...EMPTY_KPIS, ...result });
+      } catch (err) {
+        console.error("KPI load error:", err);
+        if (!cancelled) setData(EMPTY_KPIS);
+      }
+    }
+
+    loadKpis();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [refreshKey]);
+
   return (
     <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-      <Card title="Revenue" value={data?.revenue} />
-      <Card title="Expenses" value={data?.expenses} />
-      <Card title="Net Profit" value={data?.net_profit} />
-      <Card title="Gross Margin" value={(data?.gross_margin ?? 0) * 100 + "%"} />
+      <Card title="Cash Position" value={currency(data.cashPosition)} />
+      <Card title="Liquidity Ratio" value={ratio(data.liquidityRatio)} />
+      <Card title="Debt Ratio" value={percent(data.debtRatio)} />
+      <Card title="Asset Efficiency" value={multiple(data.assetEfficiency)} />
+      <Card title="Burn Rate" value={monthlyCurrency(data.burnRate)} />
+      <Card title="Working Capital" value={currency(data.workingCapital)} />
     </div>
   );
 }
 
-function Card({ title, value }: any) {
+function Card({ title, value }: { title: string; value: string }) {
   return (
     <div className="p-4 bg-white shadow rounded">
       <p className="text-gray-500">{title}</p>
-      <h2 className="text-xl font-bold">{value ?? 0}</h2>
+      <h2 className="text-xl font-bold">{value}</h2>
     </div>
   );
 }
