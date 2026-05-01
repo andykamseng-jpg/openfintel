@@ -116,28 +116,28 @@ async def upload(file: UploadFile, doc_type: str = Form(...)):
 
         with engine.begin() as conn:
 
-            # ✅ INSERT + RETURN actual inserted rows
-            result = conn.execute(text("""
+            # Insert one row at a time so rowcount reflects skipped duplicates.
+            insert_stmt = text("""
                 INSERT INTO financial_data
                 (date, description, category, amount, doc_type, fingerprint)
                 VALUES (:Date, :Description, :Category, :Amount, :doc_type, :fingerprint)
                 ON CONFLICT (fingerprint) DO NOTHING
-                RETURNING 1
-            """), [
-                {
+            """)
+
+            rows_inserted = 0
+
+            for r in records:
+                result = conn.execute(insert_stmt, {
                     "Date": r["Date"],
                     "Description": r["Description"],
                     "Category": r["Category"],
                     "Amount": float(r["Amount"]),
                     "doc_type": doc_type,
                     "fingerprint": r["fingerprint"]
-                }
-                for r in records
-            ])
+                })
+                rows_inserted += max(result.rowcount or 0, 0)
 
-            rows_inserted = len(result.fetchall())
-
-            # ✅ LOG correct values
+            # Log both parsed rows and inserted rows for the upload summary.
             conn.execute(text("""
                 INSERT INTO upload_logs (filename, doc_type, rows_uploaded, rows_inserted)
                 VALUES (:f, :d, :u, :i)
