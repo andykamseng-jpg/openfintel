@@ -658,9 +658,11 @@ def get_files():
 def get_coverage():
     with engine.begin() as conn:
         rows = conn.execute(text("""
-            SELECT doc_type, COUNT(*) as count
-            FROM financial_data
+            SELECT doc_type, COALESCE(SUM(rows_inserted), 0) as records
+            FROM upload_logs
+            WHERE doc_type IS NOT NULL
             GROUP BY doc_type
+            ORDER BY doc_type
         """)).fetchall()
 
     return {
