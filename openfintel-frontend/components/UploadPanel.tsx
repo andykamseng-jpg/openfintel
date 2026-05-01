@@ -26,13 +26,28 @@ export default function UploadPanel({ onUploadSuccess }: any) {
         }
       );
 
-      const data = await res.json();
+      // ✅ Always read raw response first
+      const text = await res.text();
+
+      let data;
+
+      try {
+        data = JSON.parse(text);
+      } catch {
+        console.error("RAW RESPONSE:", text);
+        throw new Error("Server returned invalid response");
+      }
 
       if (!res.ok) {
         throw new Error(data.detail || "Upload failed");
       }
 
-      alert("Upload successful");
+      // ✅ USE the backend result
+      const duplicates = data.uploaded - data.inserted;
+
+      alert(
+        `Upload complete\n\nUploaded: ${data.uploaded}\nInserted: ${data.inserted}\nDuplicates skipped: ${duplicates}`
+      );
 
       if (onUploadSuccess) onUploadSuccess();
 
