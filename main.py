@@ -1,3 +1,4 @@
+```python
 from fastapi import FastAPI, UploadFile, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -17,7 +18,10 @@ app = FastAPI()
 # -------------------------
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://www.openfintel.com"],  # ✅ FIXED (was "*")
+    allow_origins=[
+        "https://www.openfintel.com",
+        "https://openfintel-nine.vercel.app"
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -72,7 +76,7 @@ def root():
     return {"status": "OpenFintel backend running"}
 
 # -------------------------
-# UPLOAD API
+# UPLOAD API (FIXED)
 # -------------------------
 @app.post("/api/upload")
 async def upload(file: UploadFile, doc_type: str = Form(...)):
@@ -108,7 +112,7 @@ async def upload(file: UploadFile, doc_type: str = Form(...)):
 
         with engine.begin() as conn:
 
-            # ✅ FIXED: get actual inserted rows (not uploaded)
+            # ✅ INSERT + RETURN actual inserted rows
             result = conn.execute(text("""
                 INSERT INTO financial_data
                 (date, description, category, amount, doc_type, fingerprint)
@@ -127,8 +131,9 @@ async def upload(file: UploadFile, doc_type: str = Form(...)):
                 for r in records
             ])
 
-            rows_inserted = len(result.fetchall())  # ✅ FIXED
+            rows_inserted = len(result.fetchall())
 
+            # ✅ LOG correct values
             conn.execute(text("""
                 INSERT INTO upload_logs (filename, doc_type, rows_uploaded, rows_inserted)
                 VALUES (:f, :d, :u, :i)
@@ -136,7 +141,7 @@ async def upload(file: UploadFile, doc_type: str = Form(...)):
                 "f": file.filename,
                 "d": doc_type,
                 "u": rows_uploaded,
-                "i": rows_inserted  # ✅ FIXED
+                "i": rows_inserted
             })
 
         return {

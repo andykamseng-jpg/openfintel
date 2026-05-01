@@ -1,4 +1,4 @@
-const BASE = process.env.NEXT_PUBLIC_API_URL!;
+const BASE = process.env.NEXT_PUBLIC_API_URL || "https://openfintel.onrender.com";
 
 async function handle(res: Response) {
   if (!res.ok) {
