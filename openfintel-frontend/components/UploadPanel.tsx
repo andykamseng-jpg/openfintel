@@ -1,8 +1,19 @@
 "use client";
 
 import { useRef, useState } from "react";
+import { API_BASE } from "@/lib/api";
 
-export default function UploadPanel({ onUploadSuccess }: any) {
+type UploadPanelProps = {
+  onUploadSuccess?: () => void | Promise<void>;
+};
+
+type UploadResponse = {
+  uploaded: number;
+  inserted: number;
+  detail?: string;
+};
+
+export default function UploadPanel({ onUploadSuccess }: UploadPanelProps) {
   const fileRef = useRef<HTMLInputElement>(null);
   const [loading, setLoading] = useState(false);
 
@@ -11,6 +22,12 @@ export default function UploadPanel({ onUploadSuccess }: any) {
   }
 
   async function handleUpload(file: File) {
+    if (!file.name.toLowerCase().endsWith(".csv")) {
+      alert("Please upload a CSV file.");
+      if (fileRef.current) fileRef.current.value = "";
+      return;
+    }
+
     setLoading(true);
 
     const formData = new FormData();
@@ -18,52 +35,55 @@ export default function UploadPanel({ onUploadSuccess }: any) {
     formData.append("doc_type", "income_statement");
 
     try {
-      const res = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/api/upload`,
-        {
-          method: "POST",
-          body: formData,
-        }
-      );
+      const res = await fetch(`${API_BASE}/api/upload`, {
+        method: "POST",
+        body: formData,
+      });
 
-      // ✅ Always read raw response first
       const text = await res.text();
+      const contentType = res.headers.get("content-type") || "";
 
-      let data;
+      let data: UploadResponse;
+
+      if (!contentType.includes("application/json")) {
+        console.error("Upload returned non-JSON response:", text);
+        throw new Error(
+          text.trim() || "Upload failed because the server returned an invalid response."
+        );
+      }
 
       try {
-        data = JSON.parse(text);
+        data = JSON.parse(text) as UploadResponse;
       } catch {
-        console.error("RAW RESPONSE:", text);
-        throw new Error("Server returned invalid response");
+        console.error("Upload returned malformed JSON:", text);
+        throw new Error("Upload failed because the server returned malformed JSON.");
       }
 
       if (!res.ok) {
         throw new Error(data.detail || "Upload failed");
       }
 
-      // ✅ USE the backend result
       const duplicates = data.uploaded - data.inserted;
 
       alert(
         `Upload complete\n\nUploaded: ${data.uploaded}\nInserted: ${data.inserted}\nDuplicates skipped: ${duplicates}`
       );
 
-      if (onUploadSuccess) onUploadSuccess();
-
-    } catch (err: any) {
+      await onUploadSuccess?.();
+    } catch (err: unknown) {
       console.error(err);
-      alert(err.message || "Upload failed");
+      alert(err instanceof Error ? err.message : "Upload failed");
     } finally {
       setLoading(false);
+      if (fileRef.current) fileRef.current.value = "";
     }
   }
 
   return (
     <div className="border p-4 rounded">
-
       <input
         type="file"
+        accept=".csv,text/csv"
         ref={fileRef}
         style={{ display: "none" }}
         onChange={(e) => {
@@ -79,7 +99,6 @@ export default function UploadPanel({ onUploadSuccess }: any) {
       >
         {loading ? "Uploading..." : "Upload File"}
       </button>
-
     </div>
   );
 }
