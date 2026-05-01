@@ -45,7 +45,7 @@ export default function Home() {
 
       <UploadPanel onUploadSuccess={load} />
 
-      <FileTable data={files} />
+      <FileTable files={files} />
 
       <CoverageTracker data={coverage} />
 
