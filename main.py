@@ -100,6 +100,43 @@ def first_column(df, names):
     return None
 
 
+def numeric_columns(df, excluded=None):
+    excluded = set(excluded or [])
+    columns = []
+
+    for col in df.columns:
+        if col in excluded:
+            continue
+
+        values = df[col].dropna().head(20)
+        if values.empty:
+            continue
+
+        parsed = values.apply(parse_amount)
+        if (parsed != 0).any():
+            columns.append(col)
+
+    return columns
+
+
+def first_text_column(df, excluded=None):
+    excluded = set(excluded or [])
+
+    for col in df.columns:
+        if col in excluded:
+            continue
+
+        values = df[col].dropna().head(20)
+        if values.empty:
+            continue
+
+        parsed = values.apply(parse_amount)
+        if not (parsed != 0).any():
+            return col
+
+    return None
+
+
 def parse_amount(value):
     if pd.isna(value):
         return 0.0
@@ -252,9 +289,34 @@ def infer_balance_section(line_item):
 
 
 def insert_typed_rows(conn, upload_id, doc_type, df):
-    amount_col = first_column(df, ["amount", "value", "total", "balance", "closing_balance"])
-    date_col = first_column(df, ["date", "period", "month", "as_of_date", "transaction_date"])
-    line_col = first_column(df, ["line_item", "category", "account", "description", "name"])
+    amount_col = first_column(df, [
+        "amount",
+        "value",
+        "total",
+        "balance",
+        "closing_balance",
+        "closing_cash_balance",
+        "net_cash_flow",
+        "net_cash",
+        "net",
+        "cash_flow",
+        "cashflow",
+    ])
+    date_col = first_column(df, ["date", "period", "month", "as_of_date", "statement_date", "transaction_date"])
+    line_col = first_column(df, [
+        "line_item",
+        "category",
+        "account",
+        "description",
+        "name",
+        "item",
+        "particulars",
+        "activity",
+        "cash_flow_item",
+        "cashflow_item",
+    ])
+    if not line_col:
+        line_col = first_text_column(df, {date_col, amount_col})
 
     if doc_type == "general_ledger":
         description_col = first_column(df, ["description", "memo", "details"])
@@ -294,11 +356,54 @@ def insert_typed_rows(conn, upload_id, doc_type, df):
             """), rows)
         return len(rows)
 
-    if not amount_col:
-        raise HTTPException(status_code=400, detail="CSV must include an amount/value column")
-
     if not line_col:
         raise HTTPException(status_code=400, detail="CSV must include a line item/category/description column")
+
+    cash_in_col = first_column(df, [
+        "cash_in",
+        "inflow",
+        "inflows",
+        "receipts",
+        "cash_receipts",
+        "money_in",
+    ])
+    cash_out_col = first_column(df, [
+        "cash_out",
+        "outflow",
+        "outflows",
+        "payments",
+        "cash_payments",
+        "money_out",
+    ])
+    ignored_numeric_cols = {
+        date_col,
+        line_col,
+        "category",
+        "account",
+        "description",
+        "name",
+        "item",
+        "particulars",
+        "activity",
+        "section",
+        "type",
+        "cash_flow_type",
+    }
+    wide_amount_cols = []
+
+    if not amount_col and doc_type == "cash_flow" and (cash_in_col or cash_out_col):
+        amount_col = None
+    elif not amount_col:
+        wide_amount_cols = numeric_columns(df, ignored_numeric_cols)
+
+    if not amount_col and not wide_amount_cols and not (doc_type == "cash_flow" and (cash_in_col or cash_out_col)):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "CSV must include an amount/value column, cash in/out columns, "
+                "or monthly numeric columns"
+            ),
+        )
 
     rows = []
     for _, row in df.iterrows():
@@ -306,23 +411,40 @@ def insert_typed_rows(conn, upload_id, doc_type, df):
         if not line_item:
             continue
 
-        item = {
-            "upload_id": upload_id,
-            "line_item": line_item,
-            "amount": parse_amount(row.get(amount_col)),
-        }
-
-        if doc_type == "income_statement":
-            item["period"] = parse_date(row.get(date_col)) if date_col else None
-            item["category"] = clean_text(row.get("category") or line_item)
-        elif doc_type == "cash_flow":
-            item["period"] = parse_date(row.get(date_col)) if date_col else None
-            item["cash_flow_type"] = clean_text(row.get("cash_flow_type") or row.get("type") or line_item)
+        if doc_type == "cash_flow" and not amount_col and (cash_in_col or cash_out_col):
+            amounts = [(
+                parse_date(row.get(date_col)) if date_col else None,
+                parse_amount(row.get(cash_in_col)) - parse_amount(row.get(cash_out_col)),
+            )]
+        elif wide_amount_cols:
+            amounts = [
+                (parse_date(col), parse_amount(row.get(col)))
+                for col in wide_amount_cols
+            ]
         else:
-            item["as_of_date"] = parse_date(row.get(date_col)) if date_col else None
-            item["section"] = clean_text(row.get("section")) or infer_balance_section(line_item)
+            amounts = [(
+                parse_date(row.get(date_col)) if date_col else None,
+                parse_amount(row.get(amount_col)),
+            )]
 
-        rows.append(item)
+        for period, amount in amounts:
+            item = {
+                "upload_id": upload_id,
+                "line_item": line_item,
+                "amount": amount,
+            }
+
+            if doc_type == "income_statement":
+                item["period"] = period
+                item["category"] = clean_text(row.get("category") or line_item)
+            elif doc_type == "cash_flow":
+                item["period"] = period
+                item["cash_flow_type"] = clean_text(row.get("cash_flow_type") or row.get("type") or line_item)
+            else:
+                item["as_of_date"] = period
+                item["section"] = clean_text(row.get("section")) or infer_balance_section(line_item)
+
+            rows.append(item)
 
     if not rows:
         return 0
