@@ -2,7 +2,7 @@ from fastapi import FastAPI, UploadFile, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 import pandas as pd
 from sqlalchemy import create_engine, text
 import os, re, unicodedata, hashlib
@@ -60,7 +60,7 @@ def startup():
     init_database()
 
 # -------------------------
-# CLEAN / NORMALIZE
+# CLEAN TEXT
 # -------------------------
 def clean_text(x):
     if pd.isna(x):
@@ -89,33 +89,6 @@ def first_column(df, names):
             return name
     return None
 
-def first_text_column(df, excluded=None):
-    excluded = set(excluded or [])
-    for col in df.columns:
-        if col in excluded:
-            continue
-        values = df[col].dropna().head(20)
-        if values.empty:
-            continue
-        parsed = values.apply(parse_amount)
-        if not (parsed != 0).any():
-            return col
-    return None
-
-def numeric_columns(df, excluded=None):
-    excluded = set(excluded or [])
-    cols = []
-    for col in df.columns:
-        if col in excluded:
-            continue
-        values = df[col].dropna().head(20)
-        if values.empty:
-            continue
-        parsed = values.apply(parse_amount)
-        if (parsed != 0).any():
-            cols.append(col)
-    return cols
-
 def parse_amount(value):
     if pd.isna(value):
         return 0.0
@@ -134,109 +107,60 @@ def parse_date(value):
     return parsed.date()
 
 # -------------------------
-# LOGIC HELPERS
+# INCOME STATEMENT CHECK BLOCK (YOUR TARGET)
+# -------------------------
+def validate_income_statement_rows(rows):
+    nonzero_rows = [row for row in rows if row["amount"] != 0]
+
+    has_income_statement_lines = any(
+        is_income_statement_line(row["line_item"], row.get("category"))
+        for row in nonzero_rows
+    )
+
+    if not nonzero_rows:
+        raise HTTPException(
+            status_code=400,
+            detail="Income statement upload has no numeric values to ingest",
+        )
+
+    if not has_income_statement_lines:
+        raise HTTPException(
+            status_code=400,
+            detail="Income statement must include revenue, sales, turnover, expense, or cost lines",
+        )
+
+# -------------------------
+# HELPERS
 # -------------------------
 def is_income_statement_line(line_item, category=None):
     text_value = f"{clean_text(line_item)} {clean_text(category)}"
 
-    terms = (
-        "revenue","sales","turnover","service fees","service revenue",
-        "expense","expenses","cost","cogs","wages","salary",
-        "rent","utilities","insurance","tax",
-        "depreciation","amortisation","amortization"
+    income_statement_terms = (
+        "revenue",
+        "sales",
+        "turnover",
+        "service fees",
+        "service revenue",
+        "expense",
+        "expenses",
+        "cost",
+        "cogs",
+        "wages",
+        "salary",
+        "rent",
+        "utilities",
+        "insurance",
+        "tax",
+        "depreciation",
+        "amortisation",
+        "amortization",
     )
-    return any(t in text_value for t in terms)
+
+    return any(term in text_value for term in income_statement_terms)
 
 # -------------------------
-# CORE INSERT
+# ROOT
 # -------------------------
-def insert_typed_rows(conn, upload_id, doc_type, df):
-    amount_col = first_column(df, ["amount", "value", "total"])
-    date_col = first_column(df, ["date", "period"])
-    line_col = first_column(df, ["line_item", "category", "account", "description"])
-
-    if not line_col:
-        line_col = first_text_column(df, {date_col, amount_col})
-
-    if not line_col:
-        raise HTTPException(status_code=400, detail="Missing line item column")
-
-    rows = []
-
-    for _, row in df.iterrows():
-        line_item = str(row.get(line_col) or "").strip()
-        if not line_item:
-            continue
-
-        amount = parse_amount(row.get(amount_col))
-
-        rows.append({
-            "upload_id": upload_id,
-            "line_item": line_item,
-            "amount": amount,
-            "period": parse_date(row.get(date_col)) if date_col else None,
-            "category": clean_text(row.get("category") or line_item),
-        })
-
-    if not rows:
-        return 0
-
-    # -------------------------
-    # ✅ YOUR FIX (ADDED HERE)
-    # -------------------------
-    if doc_type == "income_statement":
-        nonzero_rows = [row for row in rows if row["amount"] != 0]
-
-        if not nonzero_rows:
-            raise HTTPException(
-                status_code=400,
-                detail="Income statement upload has no numeric values to ingest",
-            )
-
-        has_income_statement_lines = any(
-            is_income_statement_line(row["line_item"], row.get("category"))
-            for row in nonzero_rows
-        )
-
-        if not has_income_statement_lines:
-            raise HTTPException(
-                status_code=400,
-                detail="Income statement must include revenue, sales, turnover, expense, or cost lines",
-            )
-
-    # -------------------------
-    # INSERT
-    # -------------------------
-    if doc_type == "income_statement":
-        conn.execute(text("""
-            INSERT INTO income_statement (upload_id, period, line_item, category, amount)
-            VALUES (:upload_id, :period, :line_item, :category, :amount)
-        """), rows)
-
-    return len(rows)
-
-# -------------------------
-# API
-# -------------------------
-@app.post("/api/upload")
-async def upload(file: UploadFile, doc_type: str = Form(...)):
-    try:
-        df = pd.read_csv(file.file)
-        df = df.dropna(how="all")
-        df = normalize_columns(df)
-
-        if df.empty:
-            raise HTTPException(status_code=400, detail="Empty CSV")
-
-        with engine.begin() as conn:
-            upload_id = 1  # simplified
-            inserted = insert_typed_rows(conn, upload_id, doc_type, df)
-
-        return {"inserted": inserted}
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
 @app.get("/")
 def root():
-    return {"status": "running"}
+    return {"status": "OpenFintel backend running"}
