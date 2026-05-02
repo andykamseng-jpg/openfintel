@@ -1,34 +1,17 @@
 from sqlalchemy import text
 
-# -------------------------
-# CATEGORY MAPPING (STEP 1)
-# -------------------------
-CATEGORY_MAP = {
-    # COGS
-    "cost of goods": "cogs",
-    "cogs": "cogs",
-    "materials": "cogs",
-    "inventory": "cogs",
-    "direct cost": "cogs",
-    "cost of sales": "cogs",
-    "production": "cogs",
-    "manufacturing": "cogs",
-
-    # OPEX
-    "rent": "opex",
-    "salary": "opex",
-    "wages": "opex",
-    "utilities": "opex",
-    "insurance": "opex",
-    "marketing": "opex",
-    "advertising": "opex",
-    "software": "opex",
-}
-
-def classify_category(line_item: str) -> str:
+def classify_category(conn, line_item: str) -> str:
     text_val = (line_item or "").lower()
 
-    for keyword, category in CATEGORY_MAP.items():
+    rows = conn.execute(text("""
+        SELECT keyword, category
+        FROM category_mapping
+    """)).fetchall()
+
+    for row in rows:
+        keyword = str(row[0]).lower()
+        category = row[1]
+
         if keyword in text_val:
             return category
 
@@ -110,7 +93,7 @@ def calculate_kpis(conn):
         line_item = str(row[0] or "")
         amount = abs(to_float(row[1]))
 
-        category = classify_category(line_item)
+        category = classify_category(conn, line_item)
 
         if category == "cogs":
             cogs += amount
