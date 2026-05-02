@@ -773,3 +773,21 @@ def debug_tables():
         "income_statement": is_,
         "financial_data": fd
     }
+
+@app.get("/debug/sample-balance")
+def sample_balance():
+    with engine.begin() as conn:
+        rows = conn.execute(text("""
+            SELECT line_item, section, amount
+            FROM balance_sheet
+            LIMIT 20
+        """)).fetchall()
+
+    return [
+        {
+            "line_item": r[0],
+            "section": r[1],
+            "amount": float(r[2] or 0)
+        }
+        for r in rows
+    ]
