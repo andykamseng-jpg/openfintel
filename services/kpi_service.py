@@ -15,6 +15,37 @@ KPI_DEFAULTS = {
     "workingCapital": None,
 }
 
+REVENUE_TERMS = (
+    "revenue",
+    "sales",
+    "turnover",
+    "income",
+    "service fees",
+    "service revenue",
+)
+REVENUE_EXCLUDED_TERMS = (
+    "cost of sales",
+    "cost of revenue",
+    "expense",
+    "expenses",
+    "tax",
+    "net income",
+    "net profit",
+    "gross profit",
+    "other income",
+    "interest income",
+)
+BALANCE_POSITION_TERMS = (
+    "opening balance",
+    "closing balance",
+    "opening cash",
+    "closing cash",
+    "cash at beginning",
+    "cash at end",
+    "beginning cash",
+    "ending cash",
+)
+
 
 def _amount(value: Any) -> float:
     try:
@@ -36,8 +67,21 @@ def _contains(value: Any, terms: tuple[str, ...]) -> bool:
     return any(term in text_value for term in terms)
 
 
-def _contains_any(row: dict[str, Any], terms: tuple[str, ...]) -> bool:
-    return _contains(row.get("line_item"), terms) or _contains(row.get("category"), terms)
+def _row_text(row: dict[str, Any]) -> str:
+    return " ".join(
+        _norm(row.get(key))
+        for key in ("line_item", "category", "account", "description", "cash_flow_type")
+    )
+
+
+def _row_contains(row: dict[str, Any], terms: tuple[str, ...]) -> bool:
+    text_value = _row_text(row)
+    return any(term in text_value for term in terms)
+
+
+def _section_matches(value: Any, section: str) -> bool:
+    normalized = _norm(value).replace("-", "_").replace(" ", "_")
+    return normalized == section
 
 
 def _fetch_rows(conn, table_name: str) -> list[dict[str, Any]]:
@@ -65,103 +109,95 @@ def _latest_cash_flow_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [row for row in rows if row.get("period") == latest_period]
 
 
-def _line_value(rows: list[dict[str, Any]], terms: tuple[str, ...]) -> float | None:
+def _total_line(rows: list[dict[str, Any]], terms: tuple[str, ...]) -> float | None:
     for row in rows:
         if _contains(row.get("line_item"), terms):
-            return _amount(row.get("amount"))
+            return _abs_amount(row.get("amount"))
     return None
 
 
-def _line_abs_value(rows: list[dict[str, Any]], terms: tuple[str, ...]) -> float | None:
-    value = _line_value(rows, terms)
-    return abs(value) if value is not None else None
-
-
-def _section_sum(rows: list[dict[str, Any]], section: str) -> float:
-    return sum(_amount(row.get("amount")) for row in rows if _norm(row.get("section")) == section)
-
-
-def _section_abs_sum(rows: list[dict[str, Any]], section: str) -> float:
-    return sum(_abs_amount(row.get("amount")) for row in rows if _norm(row.get("section")) == section)
-
-
-def _income_revenue(rows: list[dict[str, Any]]) -> float | None:
-    revenue_terms = (
-        "revenue",
-        "sales",
-        "turnover",
-        "income",
-        "service fees",
-        "service revenue",
-    )
-    excluded_terms = (
-        "cost of sales",
-        "cost of revenue",
-        "expense",
-        "expenses",
-        "tax",
-        "net income",
-        "net profit",
-        "gross profit",
-        "other income",
-        "interest income",
-    )
-
-    total = sum(
+def _section_total(rows: list[dict[str, Any]], section: str) -> float | None:
+    values = [
         _abs_amount(row.get("amount"))
         for row in rows
-        if _contains_any(row, revenue_terms)
-        and not _contains_any(row, excluded_terms)
-    )
-    if total:
-        return total
-
-    positives = [
-        _amount(row.get("amount"))
-        for row in rows
-        if _amount(row.get("amount")) > 0
-        and not _contains_any(row, excluded_terms)
+        if _section_matches(row.get("section"), section)
+        and "total" not in _norm(row.get("line_item"))
     ]
-    return sum(positives) if positives else None
+    return sum(values) if values else None
 
 
-def _average_negative_cash_flow(rows: list[dict[str, Any]]) -> float | None:
+def _balance_value(
+    rows: list[dict[str, Any]],
+    section: str,
+    total_terms: tuple[str, ...],
+) -> float | None:
+    section_value = _section_total(rows, section)
+    if section_value is not None:
+        return section_value
+    return _total_line(rows, total_terms)
+
+
+def _cash_position(cash_flow_rows: list[dict[str, Any]], balance_rows: list[dict[str, Any]]) -> float | None:
+    latest_cash_rows = _latest_cash_flow_rows(cash_flow_rows)
+    closing = _total_line(
+        latest_cash_rows,
+        ("closing balance", "closing cash", "cash closing", "ending cash"),
+    )
+    if closing is not None:
+        return closing
+
+    for row in balance_rows:
+        if _contains(
+            row.get("line_item"),
+            ("cash at bank", "cash and cash equivalents", "cash"),
+        ):
+            return _abs_amount(row.get("amount"))
+    return None
+
+
+def _is_revenue_row(row: dict[str, Any]) -> bool:
+    return _row_contains(row, REVENUE_TERMS) and not _row_contains(row, REVENUE_EXCLUDED_TERMS)
+
+
+def _income_statement_revenue(rows: list[dict[str, Any]]) -> float | None:
+    values = [_abs_amount(row.get("amount")) for row in rows if _is_revenue_row(row)]
+    return sum(values) if values else None
+
+
+def _ledger_revenue(rows: list[dict[str, Any]]) -> float | None:
+    values = [
+        _abs_amount(row.get("amount"))
+        for row in rows
+        if _is_revenue_row(row)
+    ]
+    return sum(values) if values else None
+
+
+def _revenue(
+    income_statement_rows: list[dict[str, Any]],
+    ledger_rows: list[dict[str, Any]],
+) -> float | None:
+    income_revenue = _income_statement_revenue(income_statement_rows)
+    if income_revenue is not None:
+        return income_revenue
+    return _ledger_revenue(ledger_rows)
+
+
+def _cash_flow_amount_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        row
+        for row in rows
+        if row.get("period") is not None
+        and not _row_contains(row, BALANCE_POSITION_TERMS)
+    ]
+
+
+def _burn_rate(rows: list[dict[str, Any]]) -> float | None:
     monthly = defaultdict(float)
-    net_terms = (
-        "net cash flow",
-        "net cash movement",
-        "net increase",
-        "net decrease",
-        "net change in cash",
-    )
-    balance_terms = (
-        "opening balance",
-        "closing balance",
-        "opening cash",
-        "closing cash",
-        "cash at beginning",
-        "cash at end",
-        "beginning cash",
-        "ending cash",
-    )
-    net_rows = [
-        row
-        for row in rows
-        if _contains(row.get("line_item"), net_terms)
-        or _contains(row.get("cash_flow_type"), net_terms)
-    ]
-    source_rows = net_rows or [
-        row
-        for row in rows
-        if not _contains(row.get("line_item"), balance_terms)
-        and not _contains(row.get("cash_flow_type"), balance_terms)
-    ]
 
-    for row in source_rows:
+    for row in _cash_flow_amount_rows(rows):
         period = row.get("period")
-        if period is None:
-            continue
-        key = period.strftime("%Y-%m") if hasattr(period, "strftime") else str(period or "unknown")
+        key = period.strftime("%Y-%m") if hasattr(period, "strftime") else str(period)
         monthly[key] += _amount(row.get("amount"))
 
     negative_months = [abs(total) for total in monthly.values() if total < 0]
@@ -172,7 +208,7 @@ def _average_negative_cash_flow(rows: list[dict[str, Any]]) -> float | None:
 
 
 def _ratio(numerator: float | None, denominator: float | None) -> float | None:
-    if numerator is None or denominator in (None, 0):
+    if numerator is None or denominator is None or denominator == 0:
         return None
     return abs(numerator) / abs(denominator)
 
@@ -180,55 +216,61 @@ def _ratio(numerator: float | None, denominator: float | None) -> float | None:
 def calculate_kpis(conn) -> dict[str, float | None]:
     balance_rows = _latest_balance_rows(_fetch_rows(conn, "balance_sheet"))
     cash_flow_rows = _fetch_rows(conn, "cash_flow")
-    latest_cash_rows = _latest_cash_flow_rows(cash_flow_rows)
     income_rows = _fetch_rows(conn, "income_statement")
+    ledger_rows = _fetch_rows(conn, "general_ledger")
 
-    cash_position = _line_value(
-        latest_cash_rows,
-        ("closing balance", "closing cash", "cash closing", "ending cash"),
-    )
-    if cash_position is None:
-        cash_position = _line_value(balance_rows, ("cash at bank", "cash and cash equivalents", "cash"))
-
-    current_assets = _line_abs_value(balance_rows, ("total current assets", "current assets"))
-    if current_assets is None:
-        current_assets = _section_abs_sum(balance_rows, "current_assets") or None
-
-    current_liabilities = _line_abs_value(
+    current_assets = _balance_value(
         balance_rows,
+        "current_assets",
+        ("total current assets", "current assets"),
+    )
+    current_liabilities = _balance_value(
+        balance_rows,
+        "current_liabilities",
         ("total current liabilities", "current liabilities"),
     )
-    if current_liabilities is None:
-        current_liabilities = _section_abs_sum(balance_rows, "current_liabilities") or None
-
-    total_assets = _line_abs_value(balance_rows, ("total assets",))
+    non_current_liabilities = _balance_value(
+        balance_rows,
+        "non_current_liabilities",
+        ("total non-current liabilities", "non-current liabilities", "non current liabilities"),
+    )
+    total_assets = _balance_value(
+        balance_rows,
+        "assets",
+        ("total assets",),
+    )
     if total_assets is None:
-        total_assets = (
-            _section_abs_sum(balance_rows, "current_assets")
-            + _section_abs_sum(balance_rows, "non_current_assets")
-        ) or None
+        current_asset_total = _balance_value(
+            balance_rows,
+            "current_assets",
+            ("total current assets", "current assets"),
+        ) or 0
+        non_current_asset_total = _balance_value(
+            balance_rows,
+            "non_current_assets",
+            ("total non-current assets", "non-current assets", "non current assets"),
+        ) or 0
+        total_assets = current_asset_total + non_current_asset_total or None
 
-    total_liabilities = _line_abs_value(balance_rows, ("total liabilities",))
+    total_liabilities = _total_line(balance_rows, ("total liabilities",))
     if total_liabilities is None:
-        total_liabilities = (
-            _section_abs_sum(balance_rows, "current_liabilities")
-            + _section_abs_sum(balance_rows, "non_current_liabilities")
-        ) or None
+        total_liabilities = (current_liabilities or 0) + (non_current_liabilities or 0)
+        total_liabilities = total_liabilities or None
 
-    revenue = _income_revenue(income_rows)
-    asset_efficiency = _ratio(revenue, total_assets) if revenue is not None else None
+    revenue = _revenue(income_rows, ledger_rows)
+
     working_capital = (
-        current_assets - current_liabilities
+        current_assets - abs(current_liabilities)
         if current_assets is not None and current_liabilities is not None
         else None
     )
 
     return {
         **KPI_DEFAULTS,
-        "cashPosition": cash_position,
+        "cashPosition": _cash_position(cash_flow_rows, balance_rows),
         "liquidityRatio": _ratio(current_assets, current_liabilities),
         "debtRatio": _ratio(total_liabilities, total_assets),
-        "assetEfficiency": asset_efficiency,
-        "burnRate": _average_negative_cash_flow(cash_flow_rows),
+        "assetEfficiency": _ratio(revenue, total_assets),
+        "burnRate": _burn_rate(cash_flow_rows),
         "workingCapital": working_capital,
     }
