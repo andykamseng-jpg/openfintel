@@ -3,8 +3,11 @@ from __future__ import annotations
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date
+import logging
 from typing import Any
 
+
+logger = logging.getLogger(__name__)
 
 KPI_DEFAULTS = {
     "cashPosition": None,
@@ -19,6 +22,9 @@ OPERATING_REVENUE_TERMS = (
     "revenue",
     "sales",
     "turnover",
+    "service",
+    "fee",
+    "fees",
     "service fees",
     "service revenue",
 )
@@ -97,6 +103,13 @@ BALANCE_POSITION_TERMS = (
     "beginning cash",
     "ending cash",
 )
+NET_CASH_FLOW_TERMS = (
+    "net cash flow",
+    "net cash movement",
+    "net increase",
+    "net decrease",
+    "net change in cash",
+)
 
 
 @dataclass(frozen=True)
@@ -148,6 +161,10 @@ def row_text(row: dict[str, Any]) -> str:
     )
 
 
+def line_text(row: dict[str, Any]) -> str:
+    return " ".join(norm(row.get(key)) for key in ("line_item", "cash_flow_type"))
+
+
 def contains(text: Any, terms: tuple[str, ...]) -> bool:
     value = norm(text)
     return any(term in value for term in terms)
@@ -155,6 +172,11 @@ def contains(text: Any, terms: tuple[str, ...]) -> bool:
 
 def row_contains(row: dict[str, Any], terms: tuple[str, ...]) -> bool:
     value = row_text(row)
+    return any(term in value for term in terms)
+
+
+def line_contains(row: dict[str, Any], terms: tuple[str, ...]) -> bool:
+    value = line_text(row)
     return any(term in value for term in terms)
 
 
@@ -372,11 +394,17 @@ def cash_position(cash_flow_rows: list[dict[str, Any]], balance_rows: list[dict[
 
 def burn_rate(cash_flow_rows: list[dict[str, Any]]) -> float | None:
     monthly = defaultdict(float)
+    cash_movement_rows = [
+        row
+        for row in cash_flow_rows
+        if row_period(row) is not None
+        and not line_contains(row, BALANCE_POSITION_TERMS)
+    ]
+    net_rows = [row for row in cash_movement_rows if line_contains(row, NET_CASH_FLOW_TERMS)]
+    source_rows = net_rows or cash_movement_rows
 
-    for row in cash_flow_rows:
+    for row in source_rows:
         current = row_period(row)
-        if current is None or row_contains(row, BALANCE_POSITION_TERMS):
-            continue
         monthly[current.strftime("%Y-%m")] += amount(row.get("amount"))
 
     negative_months = [abs(total) for total in monthly.values() if total < 0]
@@ -477,17 +505,27 @@ def run_financial_engine(
         if current_assets is not None and current_liabilities is not None
         else None
     )
+    revenue_total = revenue.total
+
+    logger.warning(
+        "KPI debug values revenue=%s total_assets=%s total_liabilities=%s "
+        "current_assets=%s current_liabilities=%s",
+        revenue_total,
+        total_assets,
+        total_liabilities,
+        current_assets,
+        current_liabilities,
+    )
 
     kpis = {
         **KPI_DEFAULTS,
         "cashPosition": cash_position(filtered_cash_flow, validated_balance),
         "liquidityRatio": ratio(current_assets, current_liabilities),
         "debtRatio": ratio(total_liabilities, total_assets),
-        "assetEfficiency": ratio(revenue.total, total_assets),
+        "assetEfficiency": ratio(revenue_total, total_assets),
         "burnRate": burn_rate(filtered_cash_flow),
         "workingCapital": working_capital,
     }
-    revenue_total = revenue.total
     cogs = expenses.cogs
     operating_expenses = expenses.operating_expenses
     total_expenses = (cogs or 0) + (operating_expenses or 0) + expenses.adjustments
