@@ -58,14 +58,47 @@ def calculate_kpis(conn):
         WHERE amount > 0
     """)).scalar()
 
+        # -------------------------
+    # COGS (direct costs)
     # -------------------------
-    # EXPENSES
-    # -------------------------
-    expenses = conn.execute(text("""
+    cogs = conn.execute(text("""
         SELECT ABS(COALESCE(SUM(amount),0))
         FROM income_statement
         WHERE amount < 0
+        AND (
+            LOWER(line_item) LIKE '%cost of goods%'
+            OR LOWER(line_item) LIKE '%cogs%'
+            OR LOWER(line_item) LIKE '%direct cost%'
+            OR LOWER(line_item) LIKE '%materials%'
+            OR LOWER(line_item) LIKE '%inventory%'
+        )
     """)).scalar()
+
+    # -------------------------
+    # OPERATING EXPENSES
+    # -------------------------
+    operating_expenses = conn.execute(text("""
+        SELECT ABS(COALESCE(SUM(amount),0))
+        FROM income_statement
+        WHERE amount < 0
+        AND NOT (
+            LOWER(line_item) LIKE '%cost of goods%'
+            OR LOWER(line_item) LIKE '%cogs%'
+            OR LOWER(line_item) LIKE '%direct cost%'
+            OR LOWER(line_item) LIKE '%materials%'
+            OR LOWER(line_item) LIKE '%inventory%'
+        )
+    """)).scalar()
+
+    # -------------------------
+    # TOTAL EXPENSES
+    # -------------------------
+    expenses = cogs + operating_expenses
+
+    # -------------------------
+    # NET PROFIT
+    # -------------------------
+    net_profit = revenue - expenses
 
     # -------------------------
 # BURN RATE (deduplicated monthly outflow)
@@ -103,8 +136,8 @@ def calculate_kpis(conn):
         "working_capital": working_capital,
         "bas": {
             "revenue": revenue,
-            "cogs": 0,
-            "operating_expenses": -expenses,
+            "cogs": -cogs,
+            "operating_expenses": -operating_expenses,
             "net_profit": net_profit
         }
     }
