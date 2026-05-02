@@ -4,88 +4,71 @@ from sqlalchemy import text
 def calculate_kpis(conn):
 
     # -------------------------
-    # 💰 CASH POSITION
-    # -------------------------
-    cash = conn.execute(text("""
-        SELECT COALESCE(SUM(amount),0)
-        FROM balance_sheet
-        WHERE LOWER(line_item) LIKE '%cash%'
-    """)).scalar()
-
-    # -------------------------
-    # 📊 CURRENT ASSETS
+    # CURRENT ASSETS
     # -------------------------
     current_assets = conn.execute(text("""
         SELECT COALESCE(SUM(amount),0)
         FROM balance_sheet
-        WHERE LOWER(section) LIKE '%current asset%'
-           OR LOWER(line_item) LIKE '%cash%'
-           OR LOWER(line_item) LIKE '%receivable%'
-           OR LOWER(line_item) LIKE '%inventory%'
+        WHERE section = 'current_assets'
     """)).scalar()
 
     # -------------------------
-    # 📊 CURRENT LIABILITIES
+    # NON-CURRENT ASSETS
     # -------------------------
-    current_liabilities = conn.execute(text("""
+    non_current_assets = conn.execute(text("""
         SELECT COALESCE(SUM(amount),0)
         FROM balance_sheet
-        WHERE LOWER(section) LIKE '%current liabil%'
-           OR LOWER(line_item) LIKE '%payable%'
-           OR LOWER(line_item) LIKE '%credit%'
+        WHERE LOWER(line_item) LIKE '%non-current%'
     """)).scalar()
 
     # -------------------------
-    # 📉 TOTAL ASSETS
+    # TOTAL ASSETS
     # -------------------------
-    total_assets = conn.execute(text("""
-        SELECT COALESCE(SUM(amount),0)
-        FROM balance_sheet
-        WHERE LOWER(section) LIKE '%asset%'
-    """)).scalar()
+    total_assets = current_assets + non_current_assets
 
     # -------------------------
-    # 📉 TOTAL LIABILITIES
+    # TOTAL LIABILITIES
     # -------------------------
     total_liabilities = conn.execute(text("""
         SELECT COALESCE(SUM(amount),0)
         FROM balance_sheet
-        WHERE LOWER(section) LIKE '%liabil%'
+        WHERE LOWER(line_item) LIKE '%liabil%'
     """)).scalar()
 
     # -------------------------
-    # 📈 REVENUE
+    # CURRENT LIABILITIES
+    # -------------------------
+    current_liabilities = conn.execute(text("""
+        SELECT COALESCE(SUM(amount),0)
+        FROM balance_sheet
+        WHERE LOWER(line_item) LIKE '%current liabil%'
+    """)).scalar()
+
+    # -------------------------
+    # CASH POSITION
+    # -------------------------
+    cash = current_assets
+
+    # -------------------------
+    # REVENUE
     # -------------------------
     revenue = conn.execute(text("""
         SELECT COALESCE(SUM(amount),0)
         FROM income_statement
-        WHERE LOWER(line_item) LIKE '%sales%'
-           OR LOWER(line_item) LIKE '%revenue%'
+        WHERE amount > 0
     """)).scalar()
 
     # -------------------------
-    # 📉 COGS
+    # EXPENSES
     # -------------------------
-    cogs = conn.execute(text("""
-        SELECT COALESCE(SUM(amount),0)
+    expenses = conn.execute(text("""
+        SELECT ABS(COALESCE(SUM(amount),0))
         FROM income_statement
-        WHERE LOWER(line_item) LIKE '%cost%'
-           OR LOWER(line_item) LIKE '%cogs%'
+        WHERE amount < 0
     """)).scalar()
 
     # -------------------------
-    # ⚙️ OPERATING EXPENSES
-    # -------------------------
-    opex = conn.execute(text("""
-        SELECT COALESCE(SUM(amount),0)
-        FROM income_statement
-        WHERE LOWER(line_item) LIKE '%expense%'
-           OR LOWER(line_item) LIKE '%wage%'
-           OR LOWER(line_item) LIKE '%rent%'
-    """)).scalar()
-
-    # -------------------------
-    # 🔥 BURN RATE
+    # BURN RATE (cash flow)
     # -------------------------
     burn_rate = conn.execute(text("""
         SELECT ABS(COALESCE(SUM(amount),0))
@@ -94,13 +77,13 @@ def calculate_kpis(conn):
     """)).scalar()
 
     # -------------------------
-    # 📊 FINAL CALCULATIONS
+    # FINAL CALCULATIONS
     # -------------------------
     liquidity_ratio = (current_assets / current_liabilities) if current_liabilities else 0
     debt_ratio = (total_liabilities / total_assets) if total_assets else 0
     asset_efficiency = (revenue / total_assets) if total_assets else 0
     working_capital = current_assets - current_liabilities
-    net_profit = revenue - cogs - opex
+    net_profit = revenue - expenses
 
     return {
         "cash_position": cash,
@@ -111,8 +94,8 @@ def calculate_kpis(conn):
         "working_capital": working_capital,
         "bas": {
             "revenue": revenue,
-            "cogs": -cogs,
-            "operating_expenses": -opex,
+            "cogs": 0,
+            "operating_expenses": -expenses,
             "net_profit": net_profit
         }
     }
