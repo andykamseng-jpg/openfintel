@@ -68,21 +68,20 @@ def calculate_kpis(conn):
     """)).scalar()
 
     # -------------------------
-    # BURN RATE (true monthly outflow)
-    # ------------------------- 
+# BURN RATE (deduplicated monthly outflow)
+# -------------------------
     burn_rate = conn.execute(
-      text("""
+    text("""
         SELECT COALESCE(AVG(monthly_outflow), 0)
         FROM (
             SELECT DATE_TRUNC('month', period) as m,
-                   SUM(ABS(amount)) as monthly_outflow
+                   MAX(ABS(amount)) as monthly_outflow
             FROM cash_flow
             WHERE LOWER(cash_flow_type) = 'operating outflow'
             GROUP BY m
         ) t
-        """)
-       ).scalar()
-
+    """)
+).scalar()
     # -------------------------
     # FINAL CALCULATIONS
     # -------------------------
