@@ -27,7 +27,7 @@ def calculate_kpis(conn):
     total_assets = current_assets + non_current_assets
 
     # -------------------------
-    # CURRENT LIABILITIES (FIXED SIGN)
+    # CURRENT LIABILITIES
     # -------------------------
     current_liabilities = conn.execute(text("""
         SELECT ABS(COALESCE(SUM(amount),0))
@@ -36,7 +36,7 @@ def calculate_kpis(conn):
     """)).scalar()
 
     # -------------------------
-    # TOTAL LIABILITIES (FIXED SIGN)
+    # TOTAL LIABILITIES
     # -------------------------
     total_liabilities = conn.execute(text("""
         SELECT ABS(COALESCE(SUM(amount),0))
@@ -68,12 +68,16 @@ def calculate_kpis(conn):
     """)).scalar()
 
     # -------------------------
-    # BURN RATE (still basic for now)
+    # BURN RATE (monthly avg from cash_flow)
     # -------------------------
     burn_rate = conn.execute(text("""
-        SELECT ABS(COALESCE(SUM(amount),0))
-        FROM cash_flow
-        WHERE amount < 0
+        SELECT COALESCE(AVG(monthly_outflow), 0)
+        FROM (
+            SELECT DATE_TRUNC('month', period) as m,
+                   SUM(CASE WHEN amount < 0 THEN ABS(amount) ELSE 0 END) as monthly_outflow
+            FROM cash_flow
+            GROUP BY m
+        ) t
     """)).scalar()
 
     # -------------------------
