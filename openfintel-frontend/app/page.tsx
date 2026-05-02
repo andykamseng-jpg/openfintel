@@ -8,7 +8,7 @@ import FileTable from "@/components/FileTable";
 import CoverageTracker from "@/components/CoverageTracker";
 import KPICards from "@/components/KPICards";
 
-import { getDashboard, getFiles, getCoverage } from "@/lib/api";
+import { getDashboard, getFiles } from "@/lib/api";
 
 type DashboardData = {
   graph?: unknown;
@@ -28,6 +28,21 @@ type CoverageRow = {
   records: number;
 };
 
+function buildCoverageFromFiles(files: FileRow[]): CoverageRow[] {
+  const totals = new Map<string, number>();
+
+  for (const file of files) {
+    totals.set(
+      file.doc_type,
+      (totals.get(file.doc_type) || 0) + (file.rows_uploaded || 0)
+    );
+  }
+
+  return Array.from(totals.entries())
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([doc_type, records]) => ({ doc_type, records }));
+}
+
 export default function Home() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [files, setFiles] = useState<FileRow[]>([]);
@@ -36,15 +51,15 @@ export default function Home() {
 
   const load = useCallback(async () => {
     try {
-      const [d, f, c] = await Promise.all([
+      const [d, f] = await Promise.all([
         getDashboard(),
         getFiles(),
-        getCoverage(),
       ]);
+      const uploadRows = f.data || [];
 
       setData(d);
-      setFiles(f.data || []);
-      setCoverage(c.data || []);
+      setFiles(uploadRows);
+      setCoverage(buildCoverageFromFiles(uploadRows));
       setKpiRefreshKey((key) => key + 1);
     } catch (err) {
       console.error("Load error:", err);

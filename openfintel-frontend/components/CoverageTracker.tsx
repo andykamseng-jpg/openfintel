@@ -1,4 +1,9 @@
-export default function CoverageTracker({ data }: { data: any[] }) {
+type CoverageRow = {
+  doc_type: string;
+  records: number;
+};
+
+export default function CoverageTracker({ data }: { data: CoverageRow[] }) {
   if (!data || data.length === 0) {
     return (
       <div className="bg-white p-4 rounded-2xl shadow">
