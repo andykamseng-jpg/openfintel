@@ -744,3 +744,32 @@ def get_coverage():
             for r in rows
         ]
     }
+
+@app.get("/debug/tables")
+def debug_tables():
+    with engine.begin() as conn:
+        bs = conn.execute(text("SELECT COUNT(*) FROM balance_sheet")).scalar()
+        cf = conn.execute(text("SELECT COUNT(*) FROM cash_flow")).scalar()
+        is_ = conn.execute(text("SELECT COUNT(*) FROM income_statement")).scalar()
+        fd = conn.execute(text("SELECT COUNT(*) FROM financial_data")).scalar()
+
+    return {
+        "balance_sheet": bs,
+        "cash_flow": cf,
+        "income_statement": is_,
+        "financial_data": fd
+    }
+@app.get("/debug/tables")
+def debug_tables():
+    with engine.begin() as conn:
+        bs = conn.execute(text("SELECT COUNT(*) FROM balance_sheet")).scalar()
+        cf = conn.execute(text("SELECT COUNT(*) FROM cash_flow")).scalar()
+        is_ = conn.execute(text("SELECT COUNT(*) FROM income_statement")).scalar()
+        fd = conn.execute(text("SELECT COUNT(*) FROM financial_data")).scalar()
+
+    return {
+        "balance_sheet": bs,
+        "cash_flow": cf,
+        "income_statement": is_,
+        "financial_data": fd
+    }
