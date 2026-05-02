@@ -90,6 +90,7 @@ def calculate_kpis(conn):
     """)).scalar()
 
        # -------------------------
+    # -------------------------
     # CLASSIFY EXPENSES (STEP 1)
     # -------------------------
     rows = conn.execute(text("""
@@ -120,8 +121,8 @@ def calculate_kpis(conn):
     net_profit = revenue - expenses
 
     # -------------------------
-# BURN RATE (deduplicated monthly outflow)
-# -------------------------
+    # BURN RATE (deduplicated monthly outflow)
+    # -------------------------
     burn_rate = conn.execute(
         text("""
             SELECT COALESCE(AVG(monthly_outflow), 0)
