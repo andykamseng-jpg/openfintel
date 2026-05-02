@@ -164,7 +164,7 @@ def section_matches(value: Any, section: str) -> bool:
 
 
 def row_period(row: dict[str, Any]) -> date | None:
-    period = row.get("period") or row.get("transaction_date") or row.get("as_of_date")
+    period = row.get("period") or row.get("transaction_date") or row.get("as_of_date") or row.get("date")
     return period if isinstance(period, date) else None
 
 
@@ -301,6 +301,12 @@ def calculate_revenue(income_rows: list[dict[str, Any]], ledger_rows: list[dict[
     )
 
 
+def merge_revenue(primary: RevenueResult, fallback: RevenueResult) -> RevenueResult:
+    if primary.total is not None:
+        return primary
+    return fallback
+
+
 def classify_expense(row: dict[str, Any]) -> str | None:
     if row_contains(row, EXPENSE_ADJUSTMENT_TERMS):
         return "adjustment"
@@ -390,7 +396,9 @@ def run_financial_engine(
     cash_flow_rows: list[dict[str, Any]],
     income_statement_rows: list[dict[str, Any]],
     general_ledger_rows: list[dict[str, Any]],
+    legacy_financial_rows: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    legacy_financial_rows = legacy_financial_rows or []
     validated_balance = latest_balance_rows(dedupe_rows(
         balance_sheet_rows,
         ("as_of_date", "line_item", "section", "amount"),
@@ -407,17 +415,28 @@ def run_financial_engine(
         general_ledger_rows,
         ("transaction_date", "description", "account", "category", "amount"),
     )
+    validated_legacy_financial = dedupe_rows(
+        legacy_financial_rows,
+        ("date", "description", "category", "amount", "doc_type"),
+    )
 
     reporting_period = infer_reporting_period(
         validated_balance,
-        validated_income + validated_cash_flow + validated_ledger,
+        validated_income + validated_cash_flow + validated_ledger + validated_legacy_financial,
     )
     filtered_cash_flow = period_filter(validated_cash_flow, reporting_period)
     filtered_income = period_filter(validated_income, reporting_period)
     filtered_ledger = period_filter(validated_ledger, reporting_period)
+    filtered_legacy_financial = period_filter(validated_legacy_financial, reporting_period)
 
-    revenue = calculate_revenue(filtered_income, filtered_ledger)
+    revenue = merge_revenue(
+        calculate_revenue(filtered_income, filtered_ledger),
+        calculate_revenue(filtered_legacy_financial, []),
+    )
     expenses = calculate_expenses(filtered_income, filtered_ledger)
+    legacy_expenses = calculate_expenses(filtered_legacy_financial, [])
+    if expenses.cogs is None and expenses.operating_expenses is None and legacy_expenses.adjustments == 0:
+        expenses = legacy_expenses
 
     current_assets = balance_value(
         validated_balance,
@@ -468,10 +487,26 @@ def run_financial_engine(
         "burnRate": burn_rate(filtered_cash_flow),
         "workingCapital": working_capital,
     }
+    revenue_total = revenue.total
+    cogs = expenses.cogs
+    operating_expenses = expenses.operating_expenses
+    total_expenses = (cogs or 0) + (operating_expenses or 0) + expenses.adjustments
+    net_profit = revenue_total - total_expenses if revenue_total is not None else None
 
     return {
         "period": reporting_period,
         "revenue": revenue,
         "expenses": expenses,
+        "summary": {
+            "revenue": revenue_total,
+            "cogs": cogs,
+            "operating_expenses": operating_expenses,
+            "net_profit": net_profit,
+            "gross_margin": (
+                (revenue_total - (cogs or 0)) / revenue_total
+                if revenue_total not in (None, 0)
+                else None
+            ),
+        },
         "kpis": kpis,
     }

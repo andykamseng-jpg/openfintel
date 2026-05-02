@@ -11,7 +11,7 @@ import os, re, unicodedata, hashlib
 
 from engine.adapter import run_engine
 from engine.mapper import map_db_to_engine
-from services.kpi_service import calculate_kpis
+from services.kpi_service import calculate_engine_result, calculate_kpis
 
 app = FastAPI()
 
@@ -631,6 +631,8 @@ def get_kpis():
 def dashboard():
     try:
         with engine.begin() as conn:
+            engine_result = calculate_engine_result(conn)
+            summary = engine_result.get("summary", {})
 
             rows = conn.execute(text("""
                 SELECT category, amount
@@ -659,7 +661,7 @@ def dashboard():
                 ORDER BY month
             """)).fetchall()
 
-        if not rows:
+        if not rows and not summary.get("revenue"):
             return {"summary": {}, "graph": {}, "monthly": []}
 
         mapped_rows = [
@@ -667,10 +669,14 @@ def dashboard():
             for r in rows
         ]
 
-        drivers = map_db_to_engine(mapped_rows)
-        result = run_engine(drivers)
-
-        kpis = result.get("kpis", {})
+        legacy_result = run_engine(map_db_to_engine(mapped_rows)) if mapped_rows else {"graph": {}}
+        graph = {
+            **legacy_result.get("graph", {}),
+            "revenue": summary.get("revenue") or 0,
+            "cogs": summary.get("cogs") or 0,
+            "operating_expenses": summary.get("operating_expenses") or 0,
+            "net_profit": summary.get("net_profit") or 0,
+        }
 
         monthly_data = [
             {
@@ -684,15 +690,12 @@ def dashboard():
 
         return {
             "summary": {
-                "revenue": kpis.get("revenue", 0),
-                "expenses": kpis.get("operating_expenses", 0),
-                "net_profit": kpis.get("net_profit", 0),
-                "gross_margin": (
-                    kpis.get("gross_margin", 0) / kpis.get("revenue", 1)
-                    if kpis.get("revenue", 0) else 0
-                )
+                "revenue": summary.get("revenue") or 0,
+                "expenses": summary.get("operating_expenses") or 0,
+                "net_profit": summary.get("net_profit") or 0,
+                "gross_margin": summary.get("gross_margin") or 0,
             },
-            "graph": result.get("graph", {}),
+            "graph": graph,
             "monthly": monthly_data
         }
 
