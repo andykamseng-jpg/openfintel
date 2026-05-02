@@ -240,3 +240,49 @@ async def upload(file: UploadFile, doc_type: str = Form(...)):
 @app.get("/")
 def root():
     return {"status": "running"}
+# -------------------------
+# KPI API (SAFE)
+# -------------------------
+@app.get("/api/kpis")
+def get_kpis():
+    try:
+        with engine.begin() as conn:
+            return calculate_kpis(conn)
+    except Exception as e:
+        return {
+            "cash_position": 0,
+            "liquidity_ratio": 0,
+            "debt_ratio": 0,
+            "burn_rate": 0,
+            "working_capital": 0,
+            "error": str(e)
+        }
+
+
+# -------------------------
+# DASHBOARD API (SAFE)
+# -------------------------
+@app.get("/api/dashboard")
+def dashboard():
+    try:
+        with engine.begin() as conn:
+            result = calculate_engine_result(conn)
+
+        return {
+            "summary": result.get("summary", {}),
+            "graph": result.get("summary", {}),
+            "monthly": []
+        }
+
+    except Exception as e:
+        return {
+            "summary": {
+                "revenue": 0,
+                "expenses": 0,
+                "net_profit": 0,
+                "gross_margin": 0
+            },
+            "graph": {},
+            "monthly": [],
+            "error": str(e)
+        }
