@@ -85,11 +85,12 @@ def _section_abs_sum(rows: list[dict[str, Any]], section: str) -> float:
     return sum(_abs_amount(row.get("amount")) for row in rows if _norm(row.get("section")) == section)
 
 
-def _income_revenue(rows: list[dict[str, Any]]) -> float:
+def _income_revenue(rows: list[dict[str, Any]]) -> float | None:
     revenue_terms = (
         "revenue",
         "sales",
         "turnover",
+        "income",
         "service fees",
         "service revenue",
     )
@@ -121,7 +122,7 @@ def _income_revenue(rows: list[dict[str, Any]]) -> float:
         if _amount(row.get("amount")) > 0
         and not _contains_any(row, excluded_terms)
     ]
-    return sum(positives)
+    return sum(positives) if positives else None
 
 
 def _average_negative_cash_flow(rows: list[dict[str, Any]]) -> float | None:
@@ -215,6 +216,7 @@ def calculate_kpis(conn) -> dict[str, float | None]:
         ) or None
 
     revenue = _income_revenue(income_rows)
+    asset_efficiency = _ratio(revenue, total_assets) if revenue is not None else None
     working_capital = (
         current_assets - current_liabilities
         if current_assets is not None and current_liabilities is not None
@@ -226,7 +228,7 @@ def calculate_kpis(conn) -> dict[str, float | None]:
         "cashPosition": cash_position,
         "liquidityRatio": _ratio(current_assets, current_liabilities),
         "debtRatio": _ratio(total_liabilities, total_assets),
-        "assetEfficiency": _ratio(revenue, total_assets),
+        "assetEfficiency": asset_efficiency,
         "burnRate": _average_negative_cash_flow(cash_flow_rows),
         "workingCapital": working_capital,
     }

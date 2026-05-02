@@ -10,21 +10,21 @@ async function handle(res: Response) {
 }
 
 export async function getDashboard() {
-  const res = await fetch(`${API_BASE}/api/dashboard`);
+  const res = await fetch(`${API_BASE}/api/dashboard`, { cache: "no-store" });
   return handle(res);
 }
 
 export async function getFiles() {
-  const res = await fetch(`${API_BASE}/api/files`);
+  const res = await fetch(`${API_BASE}/api/files`, { cache: "no-store" });
   return handle(res);
 }
 
 export async function getCoverage() {
-  const res = await fetch(`${API_BASE}/api/coverage`);
+  const res = await fetch(`${API_BASE}/api/coverage`, { cache: "no-store" });
   return handle(res);
 }
 
 export async function getKpis() {
-  const res = await fetch(`${API_BASE}/api/kpis`);
+  const res = await fetch(`${API_BASE}/api/kpis`, { cache: "no-store" });
   return handle(res);
 }
