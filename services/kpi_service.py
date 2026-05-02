@@ -27,21 +27,21 @@ def calculate_kpis(conn):
     total_assets = current_assets + non_current_assets
 
     # -------------------------
-    # TOTAL LIABILITIES
+    # CURRENT LIABILITIES (FIXED SIGN)
     # -------------------------
-    total_liabilities = conn.execute(text("""
-        SELECT COALESCE(SUM(amount),0)
+    current_liabilities = conn.execute(text("""
+        SELECT ABS(COALESCE(SUM(amount),0))
         FROM balance_sheet
-        WHERE LOWER(line_item) LIKE '%liabil%'
+        WHERE LOWER(line_item) LIKE '%current liabil%'
     """)).scalar()
 
     # -------------------------
-    # CURRENT LIABILITIES
+    # TOTAL LIABILITIES (FIXED SIGN)
     # -------------------------
-    current_liabilities = conn.execute(text("""
-        SELECT COALESCE(SUM(amount),0)
+    total_liabilities = conn.execute(text("""
+        SELECT ABS(COALESCE(SUM(amount),0))
         FROM balance_sheet
-        WHERE LOWER(line_item) LIKE '%current liabil%'
+        WHERE LOWER(line_item) LIKE '%liabil%'
     """)).scalar()
 
     # -------------------------
@@ -68,7 +68,7 @@ def calculate_kpis(conn):
     """)).scalar()
 
     # -------------------------
-    # BURN RATE (cash flow)
+    # BURN RATE (still basic for now)
     # -------------------------
     burn_rate = conn.execute(text("""
         SELECT ABS(COALESCE(SUM(amount),0))
@@ -85,6 +85,9 @@ def calculate_kpis(conn):
     working_capital = current_assets - current_liabilities
     net_profit = revenue - expenses
 
+    # -------------------------
+    # RETURN
+    # -------------------------
     return {
         "cash_position": cash,
         "liquidity_ratio": round(liquidity_ratio, 2),
