@@ -24,56 +24,61 @@ CATEGORY_MAP = {
     "advertising": "opex",
     "software": "opex",
 }
+
 def classify_category(line_item: str) -> str:
-    text = (line_item or "").lower()
+    text_val = (line_item or "").lower()
 
     for keyword, category in CATEGORY_MAP.items():
-        if keyword in text:
+        if keyword in text_val:
             return category
 
     return "opex"  # safe fallback
+
+
+def to_float(value):
+    """Convert Decimal/None safely to float"""
+    return float(value or 0)
+
+
 def calculate_kpis(conn):
 
     # -------------------------
     # CURRENT ASSETS
     # -------------------------
-    current_assets = conn.execute(text("""
+    current_assets = to_float(conn.execute(text("""
         SELECT COALESCE(SUM(amount),0)
         FROM balance_sheet
         WHERE section = 'current_assets'
-    """)).scalar()
+    """)).scalar())
 
     # -------------------------
     # NON-CURRENT ASSETS
     # -------------------------
-    non_current_assets = conn.execute(text("""
+    non_current_assets = to_float(conn.execute(text("""
         SELECT COALESCE(SUM(amount),0)
         FROM balance_sheet
         WHERE LOWER(line_item) LIKE '%non-current%'
-    """)).scalar()
+    """)).scalar())
 
-    # -------------------------
-    # TOTAL ASSETS
-    # -------------------------
     total_assets = current_assets + non_current_assets
 
     # -------------------------
     # CURRENT LIABILITIES
     # -------------------------
-    current_liabilities = conn.execute(text("""
+    current_liabilities = to_float(conn.execute(text("""
         SELECT ABS(COALESCE(SUM(amount),0))
         FROM balance_sheet
         WHERE LOWER(line_item) LIKE '%current liabil%'
-    """)).scalar()
+    """)).scalar())
 
     # -------------------------
     # TOTAL LIABILITIES
     # -------------------------
-    total_liabilities = conn.execute(text("""
+    total_liabilities = to_float(conn.execute(text("""
         SELECT ABS(COALESCE(SUM(amount),0))
         FROM balance_sheet
         WHERE LOWER(line_item) LIKE '%liabil%'
-    """)).scalar()
+    """)).scalar())
 
     # -------------------------
     # CASH POSITION
@@ -83,15 +88,14 @@ def calculate_kpis(conn):
     # -------------------------
     # REVENUE
     # -------------------------
-    revenue = conn.execute(text("""
+    revenue = to_float(conn.execute(text("""
         SELECT COALESCE(SUM(amount),0)
         FROM income_statement
         WHERE amount > 0
-    """)).scalar()
+    """)).scalar())
 
-       # -------------------------
     # -------------------------
-    # CLASSIFY EXPENSES (STEP 1)
+    # CLASSIFY EXPENSES
     # -------------------------
     rows = conn.execute(text("""
         SELECT line_item, amount
@@ -99,12 +103,12 @@ def calculate_kpis(conn):
         WHERE amount < 0
     """)).fetchall()
 
-    cogs = 0
-    operating_expenses = 0
+    cogs = 0.0
+    operating_expenses = 0.0
 
     for row in rows:
         line_item = str(row[0] or "")
-        amount = abs(float(row[1] or 0))
+        amount = abs(to_float(row[1]))
 
         category = classify_category(line_item)
 
@@ -121,9 +125,9 @@ def calculate_kpis(conn):
     net_profit = revenue - expenses
 
     # -------------------------
-    # BURN RATE (deduplicated monthly outflow)
+    # BURN RATE (monthly avg)
     # -------------------------
-    burn_rate = conn.execute(
+    burn_rate = to_float(conn.execute(
         text("""
             SELECT COALESCE(AVG(monthly_outflow), 0)
             FROM (
@@ -134,7 +138,8 @@ def calculate_kpis(conn):
                 GROUP BY m
             ) t
         """)
-    ).scalar()
+    ).scalar())
+
     # -------------------------
     # FINAL CALCULATIONS
     # -------------------------
@@ -142,7 +147,6 @@ def calculate_kpis(conn):
     debt_ratio = (total_liabilities / total_assets) if total_assets else 0
     asset_efficiency = (revenue / total_assets) if total_assets else 0
     working_capital = current_assets - current_liabilities
-    net_profit = revenue - expenses
 
     # -------------------------
     # RETURN
