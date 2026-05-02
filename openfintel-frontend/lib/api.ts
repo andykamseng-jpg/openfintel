@@ -26,5 +26,14 @@ export async function getCoverage() {
 
 export async function getKpis() {
   const res = await fetch(`${API_BASE}/api/kpis`, { cache: "no-store" });
-  return handle(res);
+  const data = await handle(res);
+
+  return {
+    cashPosition: data.cash_position,
+    liquidityRatio: data.liquidity_ratio,
+    debtRatio: data.debt_ratio,
+    assetEfficiency: data.asset_efficiency,
+    burnRate: data.burn_rate,
+    workingCapital: data.working_capital,
+  };
 }
