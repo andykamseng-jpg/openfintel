@@ -1,6 +1,37 @@
 from sqlalchemy import text
 
+# -------------------------
+# CATEGORY MAPPING (STEP 1)
+# -------------------------
+CATEGORY_MAP = {
+    # COGS
+    "cost of goods": "cogs",
+    "cogs": "cogs",
+    "materials": "cogs",
+    "inventory": "cogs",
+    "direct cost": "cogs",
+    "cost of sales": "cogs",
+    "production": "cogs",
+    "manufacturing": "cogs",
 
+    # OPEX
+    "rent": "opex",
+    "salary": "opex",
+    "wages": "opex",
+    "utilities": "opex",
+    "insurance": "opex",
+    "marketing": "opex",
+    "advertising": "opex",
+    "software": "opex",
+}
+def classify_category(line_item: str) -> str:
+    text = (line_item or "").lower()
+
+    for keyword, category in CATEGORY_MAP.items():
+        if keyword in text:
+            return category
+
+    return "opex"  # safe fallback
 def calculate_kpis(conn):
 
     # -------------------------
@@ -58,41 +89,29 @@ def calculate_kpis(conn):
         WHERE amount > 0
     """)).scalar()
 
-        # -------------------------
-    # COGS (direct costs)
+       # -------------------------
+    # CLASSIFY EXPENSES (STEP 1)
     # -------------------------
-    cogs = conn.execute(text("""
-        SELECT ABS(COALESCE(SUM(amount),0))
+    rows = conn.execute(text("""
+        SELECT line_item, amount
         FROM income_statement
         WHERE amount < 0
-        AND (
-            LOWER(line_item) LIKE '%cost of goods%'
-            OR LOWER(line_item) LIKE '%cogs%'
-            OR LOWER(line_item) LIKE '%direct cost%'
-            OR LOWER(line_item) LIKE '%materials%'
-            OR LOWER(line_item) LIKE '%inventory%'
-        )
-    """)).scalar()
+    """)).fetchall()
 
-    # -------------------------
-    # OPERATING EXPENSES
-    # -------------------------
-    operating_expenses = conn.execute(text("""
-        SELECT ABS(COALESCE(SUM(amount),0))
-        FROM income_statement
-        WHERE amount < 0
-        AND NOT (
-            LOWER(line_item) LIKE '%cost of goods%'
-            OR LOWER(line_item) LIKE '%cogs%'
-            OR LOWER(line_item) LIKE '%direct cost%'
-            OR LOWER(line_item) LIKE '%materials%'
-            OR LOWER(line_item) LIKE '%inventory%'
-        )
-    """)).scalar()
+    cogs = 0
+    operating_expenses = 0
 
-    # -------------------------
-    # TOTAL EXPENSES
-    # -------------------------
+    for row in rows:
+        line_item = str(row[0] or "")
+        amount = abs(float(row[1] or 0))
+
+        category = classify_category(line_item)
+
+        if category == "cogs":
+            cogs += amount
+        else:
+            operating_expenses += amount
+
     expenses = cogs + operating_expenses
 
     # -------------------------
@@ -104,17 +123,17 @@ def calculate_kpis(conn):
 # BURN RATE (deduplicated monthly outflow)
 # -------------------------
     burn_rate = conn.execute(
-    text("""
-        SELECT COALESCE(AVG(monthly_outflow), 0)
-        FROM (
-            SELECT DATE_TRUNC('month', period) as m,
-                   MAX(ABS(amount)) as monthly_outflow
-            FROM cash_flow
-            WHERE LOWER(cash_flow_type) = 'operating outflow'
-            GROUP BY m
-        ) t
-    """)
-).scalar()
+        text("""
+            SELECT COALESCE(AVG(monthly_outflow), 0)
+            FROM (
+                SELECT DATE_TRUNC('month', period) as m,
+                       MAX(ABS(amount)) as monthly_outflow
+                FROM cash_flow
+                WHERE LOWER(cash_flow_type) = 'operating outflow'
+                GROUP BY m
+            ) t
+        """)
+    ).scalar()
     # -------------------------
     # FINAL CALCULATIONS
     # -------------------------
