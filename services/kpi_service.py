@@ -1,5 +1,3 @@
-# services/kpi_service.py
-
 from sqlalchemy import text
 
 
@@ -15,33 +13,44 @@ def calculate_kpis(conn):
     """)).scalar()
 
     # -------------------------
-    # 📊 CURRENT ASSETS / LIABILITIES
+    # 📊 CURRENT ASSETS
     # -------------------------
     current_assets = conn.execute(text("""
         SELECT COALESCE(SUM(amount),0)
         FROM balance_sheet
-        WHERE section = 'current_assets'
-    """)).scalar()
-
-    current_liabilities = conn.execute(text("""
-        SELECT COALESCE(SUM(amount),0)
-        FROM balance_sheet
-        WHERE section = 'current_liabilities'
+        WHERE LOWER(section) LIKE '%current asset%'
+           OR LOWER(line_item) LIKE '%cash%'
+           OR LOWER(line_item) LIKE '%receivable%'
+           OR LOWER(line_item) LIKE '%inventory%'
     """)).scalar()
 
     # -------------------------
-    # 📉 TOTAL ASSETS / LIABILITIES
+    # 📊 CURRENT LIABILITIES
+    # -------------------------
+    current_liabilities = conn.execute(text("""
+        SELECT COALESCE(SUM(amount),0)
+        FROM balance_sheet
+        WHERE LOWER(section) LIKE '%current liabil%'
+           OR LOWER(line_item) LIKE '%payable%'
+           OR LOWER(line_item) LIKE '%credit%'
+    """)).scalar()
+
+    # -------------------------
+    # 📉 TOTAL ASSETS
     # -------------------------
     total_assets = conn.execute(text("""
         SELECT COALESCE(SUM(amount),0)
         FROM balance_sheet
-        WHERE section IN ('current_assets','non_current_assets')
+        WHERE LOWER(section) LIKE '%asset%'
     """)).scalar()
 
+    # -------------------------
+    # 📉 TOTAL LIABILITIES
+    # -------------------------
     total_liabilities = conn.execute(text("""
         SELECT COALESCE(SUM(amount),0)
         FROM balance_sheet
-        WHERE section IN ('current_liabilities','non_current_liabilities')
+        WHERE LOWER(section) LIKE '%liabil%'
     """)).scalar()
 
     # -------------------------
@@ -50,8 +59,8 @@ def calculate_kpis(conn):
     revenue = conn.execute(text("""
         SELECT COALESCE(SUM(amount),0)
         FROM income_statement
-        WHERE LOWER(line_item) SIMILAR TO '%(revenue|sales|income)%'
-        AND LOWER(line_item) NOT SIMILAR TO '%(cost|expense|tax)%'
+        WHERE LOWER(line_item) LIKE '%sales%'
+           OR LOWER(line_item) LIKE '%revenue%'
     """)).scalar()
 
     # -------------------------
@@ -60,7 +69,8 @@ def calculate_kpis(conn):
     cogs = conn.execute(text("""
         SELECT COALESCE(SUM(amount),0)
         FROM income_statement
-        WHERE LOWER(line_item) SIMILAR TO '%(cost of sales|cogs|ingredients)%'
+        WHERE LOWER(line_item) LIKE '%cost%'
+           OR LOWER(line_item) LIKE '%cogs%'
     """)).scalar()
 
     # -------------------------
@@ -69,11 +79,13 @@ def calculate_kpis(conn):
     opex = conn.execute(text("""
         SELECT COALESCE(SUM(amount),0)
         FROM income_statement
-        WHERE LOWER(line_item) SIMILAR TO '%(expense|wages|rent|utilities)%'
+        WHERE LOWER(line_item) LIKE '%expense%'
+           OR LOWER(line_item) LIKE '%wage%'
+           OR LOWER(line_item) LIKE '%rent%'
     """)).scalar()
 
     # -------------------------
-    # 🔥 BURN RATE (CASH FLOW)
+    # 🔥 BURN RATE
     # -------------------------
     burn_rate = conn.execute(text("""
         SELECT ABS(COALESCE(SUM(amount),0))
@@ -82,7 +94,7 @@ def calculate_kpis(conn):
     """)).scalar()
 
     # -------------------------
-    # 📊 CALCULATIONS
+    # 📊 FINAL CALCULATIONS
     # -------------------------
     liquidity_ratio = (current_assets / current_liabilities) if current_liabilities else 0
     debt_ratio = (total_liabilities / total_assets) if total_assets else 0
@@ -90,9 +102,6 @@ def calculate_kpis(conn):
     working_capital = current_assets - current_liabilities
     net_profit = revenue - cogs - opex
 
-    # -------------------------
-    # 🎯 OUTPUT (MATCH YOUR FRONTEND)
-    # -------------------------
     return {
         "cash_position": cash,
         "liquidity_ratio": round(liquidity_ratio, 2),
