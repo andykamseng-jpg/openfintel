@@ -634,49 +634,15 @@ def dashboard():
             engine_result = calculate_engine_result(conn)
             summary = engine_result.get("summary", {})
 
-            rows = conn.execute(text("""
-                SELECT category, amount
-                FROM financial_data
-                WHERE doc_type = 'income_statement'
-            """)).fetchall()
-
             monthly_rows = conn.execute(text("""
                 SELECT 
-                    DATE_TRUNC('month', date) as month,
-
-                    SUM(CASE 
-                        WHEN amount > 0 THEN amount 
-                        ELSE 0 
-                    END) as revenue,
-
-                    SUM(CASE 
-                        WHEN amount < 0 THEN ABS(amount) 
-                        ELSE 0 
-                    END) as expenses
-
-                FROM financial_data
-                WHERE doc_type = 'income_statement'
-                AND date IS NOT NULL
+                    DATE_TRUNC('month', period) as month,
+                    SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END) as revenue,
+                    SUM(CASE WHEN amount < 0 THEN ABS(amount) ELSE 0 END) as expenses
+                FROM income_statement
                 GROUP BY month
                 ORDER BY month
             """)).fetchall()
-
-        if not rows and not summary.get("revenue"):
-            return {"summary": {}, "graph": {}, "monthly": []}
-
-        mapped_rows = [
-            {"category": str(r[0] or ""), "amount": float(r[1] or 0)}
-            for r in rows
-        ]
-
-        legacy_result = run_engine(map_db_to_engine(mapped_rows)) if mapped_rows else {"graph": {}}
-        graph = {
-            **legacy_result.get("graph", {}),
-            "revenue": summary.get("revenue") or 0,
-            "cogs": summary.get("cogs") or 0,
-            "operating_expenses": summary.get("operating_expenses") or 0,
-            "net_profit": summary.get("net_profit") or 0,
-        }
 
         monthly_data = [
             {
@@ -695,13 +661,17 @@ def dashboard():
                 "net_profit": summary.get("net_profit") or 0,
                 "gross_margin": summary.get("gross_margin") or 0,
             },
-            "graph": graph,
+            "graph": {
+                "revenue": summary.get("revenue") or 0,
+                "cogs": summary.get("cogs") or 0,
+                "operating_expenses": summary.get("operating_expenses") or 0,
+                "net_profit": summary.get("net_profit") or 0,
+            },
             "monthly": monthly_data
         }
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
 # -------------------------
 # FILES API
 # -------------------------
