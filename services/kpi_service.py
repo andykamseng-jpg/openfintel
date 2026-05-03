@@ -67,10 +67,10 @@ def calculate_kpis(conn):
     # TOTAL ASSETS (FIXED)
     # -------------------------
     total_assets = float(conn.execute(text("""
-        SELECT COALESCE(SUM(amount),0)
-        FROM balance_sheet
-        WHERE LOWER(line_item) LIKE '%asset%'
-        AND upload_id = :upload_id
+    SELECT COALESCE(SUM(amount),0)
+    FROM balance_sheet
+    WHERE section IN ('current_assets', 'non_current_assets')
+    AND upload_id = :upload_id
     """), {"upload_id": latest_balance_upload}).scalar() or 0)
 
     # -------------------------
