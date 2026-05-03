@@ -72,8 +72,11 @@ def calculate_kpis(conn):
     FROM balance_sheet
     WHERE upload_id = :upload_id
     AND amount > 0
-    AND LOWER(COALESCE(line_item, '')) NOT LIKE '%nan%'
-    """), {"upload_id": latest_balance_upload}).scalar() or 0)
+    AND (
+        LOWER(line_item) LIKE '%current asset%'
+        OR LOWER(line_item) LIKE '%non-current asset%'
+    )
+"""), {"upload_id": latest_balance_upload}).scalar() or 0)
 
     # -------------------------
     # CURRENT ASSETS
