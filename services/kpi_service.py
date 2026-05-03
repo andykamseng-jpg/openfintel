@@ -46,13 +46,21 @@ def classify_category_db(conn, line_item: str) -> str:
 def calculate_kpis(conn):
 
     # -------------------------
-    # GET LATEST UPLOAD ID
+    # GET LATEST UPLOADS (PER TABLE)
     # -------------------------
-    latest_upload_id = conn.execute(text("""
-        SELECT MAX(id) FROM uploads
+    latest_balance_upload = conn.execute(text("""
+        SELECT MAX(upload_id) FROM balance_sheet
     """)).scalar()
 
-    if not latest_upload_id:
+    latest_income_upload = conn.execute(text("""
+        SELECT MAX(upload_id) FROM income_statement
+    """)).scalar()
+
+    latest_cashflow_upload = conn.execute(text("""
+        SELECT MAX(upload_id) FROM cash_flow
+    """)).scalar()
+
+    if not latest_balance_upload or not latest_income_upload:
         return {}
 
     # -------------------------
@@ -63,7 +71,7 @@ def calculate_kpis(conn):
         FROM balance_sheet
         WHERE section = 'current_assets'
         AND upload_id = :upload_id
-    """), {"upload_id": latest_upload_id}).scalar() or 0)
+    """), {"upload_id": latest_balance_upload}).scalar() or 0)
 
     # -------------------------
     # NON-CURRENT ASSETS
@@ -73,7 +81,7 @@ def calculate_kpis(conn):
         FROM balance_sheet
         WHERE LOWER(line_item) LIKE '%non-current%'
         AND upload_id = :upload_id
-    """), {"upload_id": latest_upload_id}).scalar() or 0)
+    """), {"upload_id": latest_balance_upload}).scalar() or 0)
 
     total_assets = current_assets + non_current_assets
 
@@ -85,7 +93,7 @@ def calculate_kpis(conn):
         FROM balance_sheet
         WHERE LOWER(line_item) LIKE '%current liabil%'
         AND upload_id = :upload_id
-    """), {"upload_id": latest_upload_id}).scalar() or 0)
+    """), {"upload_id": latest_balance_upload}).scalar() or 0)
 
     # -------------------------
     # TOTAL LIABILITIES
@@ -95,7 +103,7 @@ def calculate_kpis(conn):
         FROM balance_sheet
         WHERE LOWER(line_item) LIKE '%liabil%'
         AND upload_id = :upload_id
-    """), {"upload_id": latest_upload_id}).scalar() or 0)
+    """), {"upload_id": latest_balance_upload}).scalar() or 0)
 
     # -------------------------
     # CASH POSITION
@@ -110,7 +118,7 @@ def calculate_kpis(conn):
         FROM income_statement
         WHERE amount > 0
         AND upload_id = :upload_id
-    """), {"upload_id": latest_upload_id}).scalar() or 0)
+    """), {"upload_id": latest_income_upload}).scalar() or 0)
 
     # -------------------------
     # CLASSIFY EXPENSES
@@ -120,7 +128,7 @@ def calculate_kpis(conn):
         FROM income_statement
         WHERE amount < 0
         AND upload_id = :upload_id
-    """), {"upload_id": latest_upload_id}).fetchall()
+    """), {"upload_id": latest_income_upload}).fetchall()
 
     cogs = 0.0
     operating_expenses = 0.0
@@ -142,17 +150,19 @@ def calculate_kpis(conn):
     # -------------------------
     # BURN RATE
     # -------------------------
-    burn_rate = float(conn.execute(text("""
-        SELECT COALESCE(AVG(monthly_outflow), 0)
-        FROM (
-            SELECT DATE_TRUNC('month', period) as m,
-                   MAX(ABS(amount)) as monthly_outflow
-            FROM cash_flow
-            WHERE LOWER(cash_flow_type) = 'operating outflow'
-            AND upload_id = :upload_id
-            GROUP BY m
-        ) t
-    """), {"upload_id": latest_upload_id}).scalar() or 0)
+    burn_rate = 0.0
+    if latest_cashflow_upload:
+        burn_rate = float(conn.execute(text("""
+            SELECT COALESCE(AVG(monthly_outflow), 0)
+            FROM (
+                SELECT DATE_TRUNC('month', period) as m,
+                       MAX(ABS(amount)) as monthly_outflow
+                FROM cash_flow
+                WHERE LOWER(cash_flow_type) = 'operating outflow'
+                AND upload_id = :upload_id
+                GROUP BY m
+            ) t
+        """), {"upload_id": latest_cashflow_upload}).scalar() or 0)
 
     # -------------------------
     # FINAL CALCULATIONS
