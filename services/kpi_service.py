@@ -1,67 +1,101 @@
 from sqlalchemy import text
 
-def classify_category(conn, line_item: str) -> str:
+# -------------------------
+# CATEGORY MAPPING (fallback if DB empty)
+# -------------------------
+CATEGORY_MAP = {
+    "cost of goods": "cogs",
+    "cogs": "cogs",
+    "materials": "cogs",
+    "inventory": "cogs",
+    "direct cost": "cogs",
+    "cost of sales": "cogs",
+    "production": "cogs",
+    "manufacturing": "cogs",
+
+    "rent": "opex",
+    "salary": "opex",
+    "wages": "opex",
+    "utilities": "opex",
+    "insurance": "opex",
+    "marketing": "opex",
+    "advertising": "opex",
+    "software": "opex",
+}
+
+
+def classify_category_db(conn, line_item: str) -> str:
     text_val = (line_item or "").lower()
 
     rows = conn.execute(text("""
-        SELECT keyword, category
-        FROM category_mapping
+        SELECT keyword, category FROM category_mapping
     """)).fetchall()
 
-    for row in rows:
-        keyword = str(row[0]).lower()
-        category = row[1]
+    for keyword, category in rows:
+        if keyword and keyword.lower() in text_val:
+            return category
 
+    # fallback
+    for keyword, category in CATEGORY_MAP.items():
         if keyword in text_val:
             return category
 
-    return "opex"  # safe fallback
-
-
-def to_float(value):
-    """Convert Decimal/None safely to float"""
-    return float(value or 0)
+    return "opex"
 
 
 def calculate_kpis(conn):
 
     # -------------------------
+    # GET LATEST UPLOAD ID
+    # -------------------------
+    latest_upload_id = conn.execute(text("""
+        SELECT MAX(id) FROM uploads
+    """)).scalar()
+
+    if not latest_upload_id:
+        return {}
+
+    # -------------------------
     # CURRENT ASSETS
     # -------------------------
-    current_assets = to_float(conn.execute(text("""
+    current_assets = float(conn.execute(text("""
         SELECT COALESCE(SUM(amount),0)
         FROM balance_sheet
         WHERE section = 'current_assets'
-    """)).scalar())
+        AND upload_id = :upload_id
+    """), {"upload_id": latest_upload_id}).scalar() or 0)
 
     # -------------------------
     # NON-CURRENT ASSETS
     # -------------------------
-    non_current_assets = to_float(conn.execute(text("""
+    non_current_assets = float(conn.execute(text("""
         SELECT COALESCE(SUM(amount),0)
         FROM balance_sheet
         WHERE LOWER(line_item) LIKE '%non-current%'
-    """)).scalar())
+        AND upload_id = :upload_id
+    """), {"upload_id": latest_upload_id}).scalar() or 0)
 
     total_assets = current_assets + non_current_assets
 
     # -------------------------
     # CURRENT LIABILITIES
     # -------------------------
-    current_liabilities = to_float(conn.execute(text("""
+    current_liabilities = float(conn.execute(text("""
         SELECT ABS(COALESCE(SUM(amount),0))
         FROM balance_sheet
         WHERE LOWER(line_item) LIKE '%current liabil%'
-    """)).scalar())
+        AND upload_id = :upload_id
+    """), {"upload_id": latest_upload_id}).scalar() or 0)
 
     # -------------------------
     # TOTAL LIABILITIES
     # -------------------------
-    total_liabilities = to_float(conn.execute(text("""
+    total_liabilities = float(conn.execute(text("""
         SELECT ABS(COALESCE(SUM(amount),0))
         FROM balance_sheet
         WHERE LOWER(line_item) LIKE '%liabil%'
-    """)).scalar())
+        AND upload_id = :upload_id
+    """), {"upload_id": latest_upload_id}).scalar() or 0)
 
     # -------------------------
     # CASH POSITION
@@ -71,11 +105,12 @@ def calculate_kpis(conn):
     # -------------------------
     # REVENUE
     # -------------------------
-    revenue = to_float(conn.execute(text("""
+    revenue = float(conn.execute(text("""
         SELECT COALESCE(SUM(amount),0)
         FROM income_statement
         WHERE amount > 0
-    """)).scalar())
+        AND upload_id = :upload_id
+    """), {"upload_id": latest_upload_id}).scalar() or 0)
 
     # -------------------------
     # CLASSIFY EXPENSES
@@ -84,16 +119,17 @@ def calculate_kpis(conn):
         SELECT line_item, amount
         FROM income_statement
         WHERE amount < 0
-    """)).fetchall()
+        AND upload_id = :upload_id
+    """), {"upload_id": latest_upload_id}).fetchall()
 
     cogs = 0.0
     operating_expenses = 0.0
 
     for row in rows:
         line_item = str(row[0] or "")
-        amount = abs(to_float(row[1]))
+        amount = abs(float(row[1] or 0))
 
-        category = classify_category(conn, line_item)
+        category = classify_category_db(conn, line_item)
 
         if category == "cogs":
             cogs += amount
@@ -101,27 +137,22 @@ def calculate_kpis(conn):
             operating_expenses += amount
 
     expenses = cogs + operating_expenses
-
-    # -------------------------
-    # NET PROFIT
-    # -------------------------
     net_profit = revenue - expenses
 
     # -------------------------
-    # BURN RATE (monthly avg)
+    # BURN RATE
     # -------------------------
-    burn_rate = to_float(conn.execute(
-        text("""
-            SELECT COALESCE(AVG(monthly_outflow), 0)
-            FROM (
-                SELECT DATE_TRUNC('month', period) as m,
-                       MAX(ABS(amount)) as monthly_outflow
-                FROM cash_flow
-                WHERE LOWER(cash_flow_type) = 'operating outflow'
-                GROUP BY m
-            ) t
-        """)
-    ).scalar())
+    burn_rate = float(conn.execute(text("""
+        SELECT COALESCE(AVG(monthly_outflow), 0)
+        FROM (
+            SELECT DATE_TRUNC('month', period) as m,
+                   MAX(ABS(amount)) as monthly_outflow
+            FROM cash_flow
+            WHERE LOWER(cash_flow_type) = 'operating outflow'
+            AND upload_id = :upload_id
+            GROUP BY m
+        ) t
+    """), {"upload_id": latest_upload_id}).scalar() or 0)
 
     # -------------------------
     # FINAL CALCULATIONS
