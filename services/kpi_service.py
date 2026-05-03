@@ -69,9 +69,9 @@ def calculate_kpis(conn):
     total_assets = float(conn.execute(text("""
     SELECT COALESCE(SUM(amount),0)
     FROM balance_sheet
-    WHERE section IN ('current_assets', 'non_current_assets')
-    AND upload_id = :upload_id
-    """), {"upload_id": latest_balance_upload}).scalar() or 0)
+    WHERE upload_id = :upload_id
+    AND amount > 0
+     """), {"upload_id": latest_balance_upload}).scalar() or 0)
 
     # -------------------------
     # CURRENT ASSETS
