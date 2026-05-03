@@ -35,7 +35,6 @@ def classify_category_db(conn, line_item: str) -> str:
         if keyword and keyword.lower() in text_val:
             return category
 
-    # fallback
     for keyword, category in CATEGORY_MAP.items():
         if keyword in text_val:
             return category
@@ -43,35 +42,37 @@ def classify_category_db(conn, line_item: str) -> str:
     return "opex"
 
 
+def get_main_upload_id(conn, table_name: str):
+    return conn.execute(text(f"""
+        SELECT upload_id
+        FROM {table_name}
+        GROUP BY upload_id
+        ORDER BY COUNT(*) DESC
+        LIMIT 1
+    """)).scalar()
+
+
 def calculate_kpis(conn):
 
     # -------------------------
-    # GET LATEST UPLOADS (PER TABLE)
+    # GET MAIN DATASET (largest upload)
     # -------------------------
-    latest_balance_upload = conn.execute(text("""
-        SELECT MAX(upload_id) FROM balance_sheet
-    """)).scalar()
-
-    latest_income_upload = conn.execute(text("""
-        SELECT MAX(upload_id) FROM income_statement
-    """)).scalar()
-
-    latest_cashflow_upload = conn.execute(text("""
-        SELECT MAX(upload_id) FROM cash_flow
-    """)).scalar()
+    latest_balance_upload = get_main_upload_id(conn, "balance_sheet")
+    latest_income_upload = get_main_upload_id(conn, "income_statement")
+    latest_cashflow_upload = get_main_upload_id(conn, "cash_flow")
 
     if not latest_balance_upload or not latest_income_upload:
         return {}
 
     # -------------------------
-    # TOTAL ASSETS (FIXED)
+    # TOTAL ASSETS (robust)
     # -------------------------
     total_assets = float(conn.execute(text("""
-    SELECT COALESCE(SUM(amount),0)
-    FROM balance_sheet
-    WHERE upload_id = :upload_id
-    AND amount > 0
-     """), {"upload_id": latest_balance_upload}).scalar() or 0)
+        SELECT COALESCE(SUM(amount),0)
+        FROM balance_sheet
+        WHERE upload_id = :upload_id
+        AND amount > 0
+    """), {"upload_id": latest_balance_upload}).scalar() or 0)
 
     # -------------------------
     # CURRENT ASSETS
