@@ -64,6 +64,16 @@ def calculate_kpis(conn):
         return {}
 
     # -------------------------
+    # TOTAL ASSETS (FIXED)
+    # -------------------------
+    total_assets = float(conn.execute(text("""
+        SELECT COALESCE(SUM(amount),0)
+        FROM balance_sheet
+        WHERE LOWER(line_item) LIKE '%asset%'
+        AND upload_id = :upload_id
+    """), {"upload_id": latest_balance_upload}).scalar() or 0)
+
+    # -------------------------
     # CURRENT ASSETS
     # -------------------------
     current_assets = float(conn.execute(text("""
@@ -72,18 +82,6 @@ def calculate_kpis(conn):
         WHERE section = 'current_assets'
         AND upload_id = :upload_id
     """), {"upload_id": latest_balance_upload}).scalar() or 0)
-
-    # -------------------------
-    # NON-CURRENT ASSETS
-    # -------------------------
-    non_current_assets = float(conn.execute(text("""
-        SELECT COALESCE(SUM(amount),0)
-        FROM balance_sheet
-        WHERE LOWER(line_item) LIKE '%non-current%'
-        AND upload_id = :upload_id
-    """), {"upload_id": latest_balance_upload}).scalar() or 0)
-
-    total_assets = current_assets + non_current_assets
 
     # -------------------------
     # CURRENT LIABILITIES
