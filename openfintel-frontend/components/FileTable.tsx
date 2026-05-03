@@ -1,7 +1,7 @@
 export default function FileTable({ files }: { files: any[] }) {
   if (!files.length) {
     return (
-      <div className="bg-white p-4 rounded-2xl shadow">
+      <div className="bg-white p-4 rounded-2xl shadow border">
         <h2 className="text-lg font-semibold mb-2">Recent Uploads</h2>
         <p className="text-gray-500">No files uploaded yet</p>
       </div>
@@ -9,7 +9,7 @@ export default function FileTable({ files }: { files: any[] }) {
   }
 
   return (
-    <div className="bg-white p-4 rounded-2xl shadow">
+    <div className="bg-white p-4 rounded-2xl shadow border">
       <h2 className="text-lg font-semibold mb-4">Recent Uploads</h2>
 
       <table className="w-full text-sm">

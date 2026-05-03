@@ -4,7 +4,7 @@ export default function BASGraph({ data }: any) {
   if (!data) return null;
 
   return (
-    <div className="border p-4 rounded">
+    <div className="bg-white p-4 rounded-2xl shadow border">
       <h2 className="text-lg font-semibold mb-4">
         Business Flow (BAS)
       </h2>

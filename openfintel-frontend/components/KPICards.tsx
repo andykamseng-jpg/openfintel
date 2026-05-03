@@ -58,23 +58,17 @@ export default function KPICards({ refreshKey = 0 }: { refreshKey?: number }) {
   const [data, setData] = useState<Kpis>(EMPTY_KPIS);
 
   useEffect(() => {
-    let cancelled = false;
-
     async function loadKpis() {
       try {
         const result = await getKpis();
-        if (!cancelled) setData({ ...EMPTY_KPIS, ...result });
+        setData({ ...EMPTY_KPIS, ...result });
       } catch (err) {
-        console.error("KPI load error:", err);
-        if (!cancelled) setData(EMPTY_KPIS);
+        console.error(err);
+        setData(EMPTY_KPIS);
       }
     }
 
     loadKpis();
-
-    return () => {
-      cancelled = true;
-    };
   }, [refreshKey]);
 
   return (
@@ -91,9 +85,9 @@ export default function KPICards({ refreshKey = 0 }: { refreshKey?: number }) {
 
 function Card({ title, value }: { title: string; value: string }) {
   return (
-    <div className="p-4 bg-white shadow rounded">
-      <p className="text-gray-500">{title}</p>
-      <h2 className="text-xl font-bold">{value}</h2>
+    <div className="p-4 bg-white shadow rounded-2xl border">
+      <p className="text-gray-500 text-sm">{title}</p>
+      <h2 className="text-2xl font-bold mt-1">{value}</h2>
     </div>
   );
 }

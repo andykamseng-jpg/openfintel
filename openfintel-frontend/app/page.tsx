@@ -1,41 +1,28 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-import UploadPanel from "@/components/UploadPanel";
+import { useEffect, useState } from "react";
+
+import Navbar from "@/components/Navbar";
+import KPICards from "@/components/KPICards";
 import BASGraph from "@/components/BASGraph";
 import MonthlyChart from "@/components/MonthlyChart";
 import FileTable from "@/components/FileTable";
 import CoverageTracker from "@/components/CoverageTracker";
-import KPICards from "@/components/KPICards";
+import UploadPanel from "@/components/UploadPanel";
 
 import { getDashboard, getFiles, getCoverage } from "@/lib/api";
 
-type DashboardData = {
-  graph?: unknown;
-  monthly?: unknown[];
-};
-
-type FileRow = {
-  filename: string;
-  doc_type: string;
-  rows_uploaded: number;
-  rows_inserted: number;
-  created_at?: string;
-};
-
-type CoverageRow = {
-  doc_type: string;
-  records: number;
-};
-
 export default function Home() {
-  const [data, setData] = useState<DashboardData | null>(null);
-  const [files, setFiles] = useState<FileRow[]>([]);
-  const [coverage, setCoverage] = useState<CoverageRow[]>([]);
-  const [kpiRefreshKey, setKpiRefreshKey] = useState(0);
+  const [data, setData] = useState<any>(null);
+  const [files, setFiles] = useState<any[]>([]);
+  const [coverage, setCoverage] = useState<any[]>([]);
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [error, setError] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
+  async function load() {
     try {
+      setError(null);
+
       const [d, f, c] = await Promise.all([
         getDashboard(),
         getFiles(),
@@ -45,37 +32,52 @@ export default function Home() {
       setData(d);
       setFiles(f.data || []);
       setCoverage(c.data || []);
-      setKpiRefreshKey((key) => key + 1);
-    } catch (err) {
-      console.error("Load error:", err);
+      setRefreshKey((k) => k + 1);
+
+    } catch (err: any) {
+      console.error(err);
+      setError(err.message || "Failed to load data");
     }
-  }, []);
+  }
 
   useEffect(() => {
-    const timer = window.setTimeout(() => {
-      void load();
-    }, 0);
+    load();
+  }, []);
 
-    return () => window.clearTimeout(timer);
-  }, [load]);
+  if (error) {
+    return <div className="p-6 text-red-600">❌ {error}</div>;
+  }
 
-  if (!data) return <div className="p-6">Loading...</div>;
+  if (!data) {
+    return <div className="p-6">Loading...</div>;
+  }
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="min-h-screen flex flex-col">
 
-      <KPICards refreshKey={kpiRefreshKey} />
+      <Navbar />
 
-      <BASGraph data={data.graph} />
+      <div className="p-6 space-y-6">
 
-      <MonthlyChart data={data.monthly || []} />
+        {/* KPI */}
+        <KPICards refreshKey={refreshKey} />
 
-      <UploadPanel onUploadSuccess={load} />
+        {/* BAS */}
+        <BASGraph data={data.graph} />
 
-      <FileTable files={files} />
+        {/* Chart */}
+        <MonthlyChart data={data.monthly} />
 
-      <CoverageTracker data={coverage} />
+        {/* Upload */}
+        <UploadPanel onUploadSuccess={load} />
 
+        {/* Tables */}
+        <div className="grid md:grid-cols-2 gap-6">
+          <FileTable files={files} />
+          <CoverageTracker data={coverage} />
+        </div>
+
+      </div>
     </div>
   );
 }

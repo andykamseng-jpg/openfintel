@@ -14,7 +14,7 @@ import {
 export default function MonthlyChart({ data }: { data: any[] }) {
   if (!data || data.length === 0) {
     return (
-      <div className="bg-white p-4 rounded-2xl shadow">
+      <div className="bg-white p-4 rounded-2xl shadow border">
         <h2 className="text-lg font-semibold">Monthly Performance</h2>
         <p className="text-gray-500 mt-2">No data available</p>
       </div>
@@ -22,14 +22,14 @@ export default function MonthlyChart({ data }: { data: any[] }) {
   }
 
   const formatted = data.map((d) => ({
-  ...d,
-  month: new Date(d.month + "-01").toLocaleString("default", {
-    month: "short",
-  }),
-}));
+    ...d,
+    month: new Date(d.month + "-01").toLocaleString("default", {
+      month: "short",
+    }),
+  }));
 
   return (
-    <div className="bg-white p-4 rounded-2xl shadow">
+    <div className="bg-white p-4 rounded-2xl shadow border">
       <h2 className="text-lg font-semibold mb-4">
         Monthly Performance
       </h2>
